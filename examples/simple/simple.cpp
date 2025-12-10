@@ -113,6 +113,8 @@ int main(int argc, char ** argv) {
     // enable performance counters
     ctx_params.no_perf = false;
 
+    ctx_params.op_offload = false;
+
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
     if (ctx == NULL) {
