@@ -2751,17 +2751,17 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     }
 
     if (llama_supports_gpu_offload()) {
-        const int n_gpu = std::min(n_gpu_layers, int(hparams.n_layer));
+        const int n_gpu = std::min(n_static_gpu_layers, int(hparams.n_layer));
 
-        LLAMA_LOG_INFO("%s: offloading %d repeating layers to GPU\n", __func__, n_gpu);
-        if (n_gpu_layers > (int) hparams.n_layer) {
+        LLAMA_LOG_INFO("%s: offloading %d static layers to GPU\n", __func__, n_gpu);
+        if (n_static_gpu_layers > (int) hparams.n_layer) {
             LLAMA_LOG_INFO("%s: offloading output layer to GPU\n", __func__);
         }
 
         const int max_backend_supported_layers = hparams.n_layer + 1;
         const int max_offloadable_layers       = hparams.n_layer + 1;
 
-        LLAMA_LOG_INFO("%s: offloaded %d/%d layers to GPU\n", __func__, std::min(n_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
+        LLAMA_LOG_INFO("%s: offloaded %d/%d static layers to GPU\n", __func__, std::min(n_static_gpu_layers, max_offloadable_layers), max_backend_supported_layers);
     }
 
     // print memory requirements per buffer type
