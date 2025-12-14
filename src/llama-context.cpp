@@ -168,6 +168,10 @@ llama_context::llama_context(
     // initialized later
     cparams.pipeline_parallel = false;
 
+    // pipo params
+    cparams.enable_pipo = params.enable_pipo;
+    cparams.n_cpu_layers_per_split = params.n_cpu_layers_per_split;
+
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
         graph_reuse_disable = LLAMA_GRAPH_REUSE_DISABLE ? (atoi(LLAMA_GRAPH_REUSE_DISABLE) != 0) : graph_reuse_disable;
@@ -206,6 +210,8 @@ llama_context::llama_context(
     LLAMA_LOG_INFO("%s: kv_unified    = %s\n",   __func__, cparams.kv_unified ? "true" : "false");
     LLAMA_LOG_INFO("%s: freq_base     = %.1f\n", __func__, cparams.rope_freq_base);
     LLAMA_LOG_INFO("%s: freq_scale    = %g\n",   __func__, cparams.rope_freq_scale);
+    LLAMA_LOG_INFO("%s: enable_pipo   = %s\n",   __func__, cparams.enable_pipo ? "true" : "false");
+    LLAMA_LOG_INFO("%s: n_cpu_layers_per_split      = %u\n",   __func__, cparams.n_cpu_layers_per_split);
 
     if (cparams.n_ctx_seq < hparams.n_ctx_train) {
         LLAMA_LOG_WARN("%s: n_ctx_seq (%u) < n_ctx_train (%u) -- the full capacity of the model will not be utilized\n",
@@ -2890,6 +2896,7 @@ llama_context_params llama_context_default_params() {
         /*.n_batch                     =*/ 2048,
         /*.n_ubatch                    =*/ 512,
         /*.n_seq_max                   =*/ 1,
+        /*.n_cpu_layers_per_split      =*/ 99,
         /*.n_threads                   =*/ GGML_DEFAULT_N_THREADS, // TODO: better default
         /*.n_threads_batch             =*/ GGML_DEFAULT_N_THREADS,
         /*.rope_scaling_type           =*/ LLAMA_ROPE_SCALING_TYPE_UNSPECIFIED,
@@ -2918,6 +2925,7 @@ llama_context_params llama_context_default_params() {
         /*.kv_unified                  =*/ false,
         /*.sampler                     =*/ nullptr,
         /*.n_sampler                   =*/ 0,
+        /*enable_pipo                  =*/ false,
     };
 
     return result;
