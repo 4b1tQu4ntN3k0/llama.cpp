@@ -678,6 +678,10 @@ struct ggml_backend_sched_split {
     int n_inputs;
     // graph view of this split
     struct ggml_cgraph graph;
+
+    // pipo info
+    bool is_dynamic_layer;
+    bool has_async_weight_transfer;
 };
 
 struct ggml_backend_sched {
@@ -734,6 +738,14 @@ struct ggml_backend_sched {
     int debug_realloc;
     int debug_graph_size;
     int debug_prev_graph_size;
+
+    // pipo params
+    bool enable_pipo;
+    // int n_layers = 0;
+    int n_cpu_layers_per_split = 3;
+    int n_static_layers = 10;
+    // struct ggml_cgraph dynamic_layer;
+    struct ggml_backend_sched_split dynamic_split;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -919,6 +931,40 @@ static void ggml_backend_sched_set_if_supported(ggml_backend_sched_t sched, stru
     }
 }
 
+void pipo_split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
+    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
+    int n_static_layers = sched->n_static_layers;
+    int gpu_backend = 0;
+    for (int i = 0; i < graph->n_leafs; i++) {
+        struct ggml_tensor * leaf = graph->leafs[i];
+        int * leaf_backend_id = &tensor_backend_id(leaf);
+        int layer_id = -1;
+        
+        bool is_weight = strstr(leaf->name, "weight") != NULL;
+        if(is_weight){
+            sscanf(leaf->name, "blk.%d", &layer_id);
+        }
+
+        if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0) {
+            // move to gpu
+            *leaf_backend_id = gpu_backend;
+        }
+    }
+    for (int i = 0; i < graph->n_nodes; i++) {
+        struct ggml_tensor * node = graph->nodes[i];
+        int * node_backend_id = &tensor_backend_id(node);
+        int layer_id = -1;
+        char * ptr = strrchr(node->name, '-');
+        if (ptr) {
+            layer_id = atoi(ptr + 1);
+        }
+        if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0) {
+            // move to gpu
+            * node_backend_id = gpu_backend;
+        }
+    }
+}
+
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     // reset splits
@@ -937,6 +983,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     sched->ctx = ggml_init(params);
     if (sched->ctx == NULL) {
         GGML_ABORT("%s: failed to initialize context\n", __func__);
+    }
+
+    // pipo config
+    if(sched->enable_pipo){
+        pipo_split(sched, graph);
     }
 
     // pass 1: assign backends to ops with pre-allocated inputs
@@ -1440,6 +1491,28 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
+static enum ggml_status ggml_backend_sched_compute_splits_pipo(ggml_backend_sched_t sched) {
+    GGML_ASSERT(sched);
+    struct ggml_backend_sched_split * splits = sched->splits;
+
+    ggml_tensor * prev_ids_tensor = nullptr;
+    std::vector<int32_t> ids;
+    std::vector<ggml_bitset_t> used_ids;
+
+    struct ggml_backend_sched_split * dynamic_split = &sched->dynamic_split;
+
+    for (int split_id = 0; split_id < sched->n_splits; split_id++) {
+        struct ggml_backend_sched_split * split = &splits[split_id];
+        if(split->is_dynamic_layer){
+            // split = dynamic_split;
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            }
+        }
+        
+    }
+
+}
+
 static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
@@ -1632,7 +1705,10 @@ ggml_backend_sched_t ggml_backend_sched_new(
         int n_backends,
         size_t graph_size,
         bool parallel,
-        bool op_offload) {
+        bool op_offload,
+        bool enable_pipo,
+        uint32_t n_cpu_layers_per_split,
+        uint32_t n_static_layers) {
     GGML_ASSERT(n_backends > 0);
     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -1689,6 +1765,11 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     sched->galloc = ggml_gallocr_new_n(sched->bufts, n_backends);
     sched->op_offload = op_offload;
+
+    // pipo params
+    sched->enable_pipo = enable_pipo;
+    sched->n_cpu_layers_per_split = n_cpu_layers_per_split;
+    sched->n_static_layers = n_static_layers;
 
     ggml_backend_sched_reset(sched);
 
