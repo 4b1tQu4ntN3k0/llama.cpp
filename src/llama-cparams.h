@@ -12,6 +12,7 @@ struct llama_cparams {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
+    uint32_t n_cpu_layers_per_split;
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 
@@ -34,6 +35,7 @@ struct llama_cparams {
     bool warmup;
     bool op_offload;
     bool kv_unified;
+    bool enable_pipo;
 
     enum llama_pooling_type pooling_type;
 

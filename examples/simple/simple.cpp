@@ -115,6 +115,9 @@ int main(int argc, char ** argv) {
 
     ctx_params.op_offload = false;
 
+    ctx_params.enable_pipo = true;
+    ctx_params.n_cpu_layers_per_split = 3;
+
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
     if (ctx == NULL) {
