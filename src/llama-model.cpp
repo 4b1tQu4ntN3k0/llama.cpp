@@ -2845,6 +2845,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
+    return load_tensors_pipo(ml);
     const auto & split_mode   = params.split_mode;
     const auto & use_mlock    = params.use_mlock;
     const auto & tensor_split = params.tensor_split;
