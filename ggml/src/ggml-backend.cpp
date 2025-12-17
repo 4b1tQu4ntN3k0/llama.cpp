@@ -744,8 +744,6 @@ struct ggml_backend_sched {
     // int n_layers = 0;
     int n_cpu_layers_per_split = 3;
     int n_static_layers = 10;
-    // struct ggml_cgraph dynamic_layer;
-    struct ggml_backend_sched_split dynamic_split;
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1610,7 +1608,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
-static enum ggml_status ggml_backend_sched_compute_splits_pipo(ggml_backend_sched_t sched) {
+static enum ggml_status ggml_backend_sched_compute_splits_pipo(ggml_backend_sched_t sched, ggml_backend_sched_t layer_sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
@@ -1618,13 +1616,26 @@ static enum ggml_status ggml_backend_sched_compute_splits_pipo(ggml_backend_sche
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
-    struct ggml_backend_sched_split * dynamic_split = &sched->dynamic_split;
+    struct ggml_backend_sched_split * dynamic_split = &layer_sched->splits[0];
+
+    int gpu_split_cnt = 0;
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
+    
+        int split_backend_id = split->backend_id;
+        if(split_backend_id == 0) gpu_split_cnt++;
+        bool is_dynamic_split = gpu_split_cnt > 1 && split_backend_id == 0;
+        if(is_dynamic_split){
+            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+
+            }
+        }
+        
         if(split->is_dynamic_layer){
             // split = dynamic_split;
-            for (int input_id = 0; input_id < split->n_inputs; input_id++) {
+            for (int input_id = 0; input_id < dynamic_split->n_inputs; input_id++) {
+                dynamic_split->inputs[input_id] = split->inputs[input_id];
             }
         }
         
@@ -2001,6 +2012,23 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
     }
 
     return ggml_backend_sched_compute_splits(sched);
+}
+
+enum ggml_status ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_t sched, struct ggml_cgraph * graph, ggml_backend_sched_t sched_layer) {
+    GGML_ASSERT(sched);
+    GGML_ASSERT(sched_layer);
+    GGML_ASSERT(sched_layer->is_alloc);
+    if (!sched->is_reset && !sched->is_alloc) {
+        ggml_backend_sched_reset(sched);
+    }
+
+    if (!sched->is_alloc) {
+        if (!ggml_backend_sched_alloc_graph(sched, graph)) {
+            return GGML_STATUS_ALLOC_FAILED;
+        }
+    }
+
+    return ggml_backend_sched_compute_splits_pipo(sched, sched_layer);
 }
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {

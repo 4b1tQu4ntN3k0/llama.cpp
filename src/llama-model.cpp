@@ -7702,6 +7702,21 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     return res;
 }
 
+ggml_cgraph * llama_model::build_graph_layer(const llm_graph_params & params) const {
+    std::unique_ptr<llm_graph_context> llm;
+
+    switch (arch) {
+        case LLM_ARCH_QWEN3:
+            {
+                llm = std::make_unique<llm_build_qwen3_layer>(*this, params);
+            } break;
+        default:
+            GGML_ABORT("build_graph_layer fatal error");
+    }
+
+    return llm->res->get_gf();
+}
+
 ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     std::unique_ptr<llm_graph_context> llm;
 

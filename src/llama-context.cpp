@@ -443,6 +443,43 @@ llama_context::llama_context(
             }
         }
 
+
+        // reserve pipo dynamic layer
+        {
+            if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
+                auto * gf = graph_reserve_pipo(1, n_seqs, n_outputs, mctx.get(), true);
+                if (!gf) {
+                    throw std::runtime_error("failed to split graph for Flash Attention check");
+                }
+            }
+            {
+
+                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                if (!gf) {
+                    if (pipeline_parallel) {
+                        LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
+                        sched_layer.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload, false, 0, 0));
+                        gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                    }
+                    if (!gf) {
+                        throw std::runtime_error("failed to allocate compute pp buffers");
+                    }
+                }
+            }
+            {
+                auto * gf = graph_reserve_pipo(n_seqs, n_seqs, n_seqs, mctx.get());
+                if (!gf) {
+                    throw std::runtime_error("failed to allocate compute tg buffers");
+                }
+            }
+            {
+                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                if (!gf) {
+                    throw std::runtime_error("failed to allocate compute pp buffers");
+                }
+            }
+        }
+
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
@@ -827,9 +864,14 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
+    auto * res_layer = gf_dynamic_layer.get();
+    auto * gf_layer  = res_layer->get_gf();
+
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
     const auto gparams = graph_params(res, ubatch, mctx, gtype);
+
+    const auto gparams_layer = graph_params_layer(res_layer, ubatch, mctx, gtype);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -837,13 +879,19 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         n_reused++;
     } else {
         res->reset();
+        res_layer->reset();
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
 
+        ggml_backend_sched_reset(sched_layer.get());
+        ggml_backend_sched_set_eval_callback(sched_layer.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+
         //const auto t_start_us = ggml_time_us();
 
         gf = model.build_graph(gparams);
+
+        gf_layer = model.build_graph_layer(gparams_layer);
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
@@ -854,6 +902,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+            LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
+            ret = GGML_STATUS_ALLOC_FAILED;
+            return nullptr;
+        }
+
+        if (!ggml_backend_sched_alloc_graph(sched_layer.get(), gf_layer)) {
             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
@@ -1461,6 +1515,80 @@ llm_graph_result * llama_context::get_gf_res_reserve() const {
     return static_cast<llm_graph_result *>(gf_res_reserve.get());
 }
 
+ggml_cgraph * llama_context::graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
+    LLAMA_LOG_DEBUG("PIPO: %s: reserving a single layer for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+    GGML_ASSERT(n_outputs >= 1);
+    if (n_tokens % n_seqs != 0) {
+        n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
+        n_outputs = std::min(n_outputs, n_tokens);
+
+        LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
+    }
+
+    ggml_backend_sched_reset(sched_layer.get());
+
+    // store the n_outputs as it is, and restore it afterwards
+    // TODO: not sure if needed, might simplify in the future by removing this
+
+    llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
+    llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+
+    auto * res = gf_dynamic_layer.get();
+
+    const auto gparams = graph_params_layer(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+
+    res->reset();
+
+    auto * gf = model.build_graph_layer(gparams);
+
+    // initialize scheduler with the specified graph
+    if (split_only) {
+        ggml_backend_sched_split_graph(sched_layer.get(), gf);
+    } else if (!ggml_backend_sched_reserve(sched_layer.get(), gf)) {
+        LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+        return nullptr;
+    }
+
+    return gf;
+}
+
+ggml_cgraph * llama_context::graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
+    LLAMA_LOG_DEBUG("PIPO: %s: reserving a single layer for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
+    GGML_ASSERT(n_outputs >= 1);
+    if (n_tokens % n_seqs != 0) {
+        n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
+        n_outputs = std::min(n_outputs, n_tokens);
+
+        LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
+    }
+
+    ggml_backend_sched_reset(sched_layer.get());
+
+    // store the n_outputs as it is, and restore it afterwards
+    // TODO: not sure if needed, might simplify in the future by removing this
+
+    llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
+    llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
+
+    auto * res = gf_dynamic_layer.get();
+
+    const auto gparams = graph_params_layer(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+
+    res->reset();
+
+    auto * gf = model.build_graph_layer(gparams);
+
+    // initialize scheduler with the specified graph
+    if (split_only) {
+        ggml_backend_sched_split_graph(sched_layer.get(), gf);
+    } else if (!ggml_backend_sched_reserve(sched_layer.get(), gf)) {
+        LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
+        return nullptr;
+    }
+
+    return gf;
+}
+
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
@@ -1536,6 +1664,29 @@ llm_graph_params llama_context::graph_params(
     };
 }
 
+llm_graph_params llama_context::graph_params_layer(
+                        llm_graph_result * res,
+                      const llama_ubatch & ubatch,
+            const llama_memory_context_i * mctx,
+            llm_graph_type   gtype) const {
+    return {
+        /*.arch        =*/ model.arch,
+        /*.hparams     =*/ model.hparams,
+        /*.cparams     =*/ cparams,
+        /*.ubatch      =*/ ubatch,
+        /*.gtype       =*/ gtype,
+        /*.sched       =*/ sched_layer.get(),
+        /*.backend_cpu =*/ backend_cpu,
+        /*.cvec        =*/ &cvec,
+        /*.loras       =*/ &loras,
+        /*.mctx        =*/ mctx,
+        /*.cross       =*/ &cross,
+        /*.n_outputs   =*/ n_outputs,
+        /*.cb          =*/ graph_get_cb(),
+        /*.res         =*/ res,
+    };
+}
+
 ggml_status llama_context::graph_compute(
             ggml_cgraph * gf,
                    bool   batched) {
@@ -1555,7 +1706,13 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    auto status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    ggml_status status;
+    if(cparams.enable_pipo){
+        status = ggml_backend_sched_graph_compute_async_pipo(sched.get(), gf, sched_layer.get());
+    }
+    else {
+        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+    }
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
