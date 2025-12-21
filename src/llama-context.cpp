@@ -256,6 +256,7 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
+        memory_layer.reset(model.create_memory_layer(params_mem, cparams));
     }
 
     // init backends
@@ -324,8 +325,11 @@ llama_context::llama_context(
             }
         }
         if(cparams.enable_pipo){
+            gf_dynamic_layer.reset(new llm_graph_result(max_nodes));
             sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload,
                                                 cparams.enable_pipo, cparams.n_cpu_layers_per_split, model.params.n_gpu_layers));
+            sched_layer.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload,
+                                                cparams.enable_pipo, cparams.n_cpu_layers_per_split, model.params.n_gpu_layers));    
         }
         else{
             sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload, false, 0, 0));
@@ -337,10 +341,15 @@ llama_context::llama_context(
         }
 
         llama_memory_context_ptr mctx;
+        llama_memory_context_ptr mctx_layer;
         if (memory) {
             LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
             mctx = memory->init_full();
             if (!mctx) {
+                throw std::runtime_error("failed to initialize memory module");
+            }
+            mctx_layer = memory_layer->init_full();
+            if (!mctx_layer) {
                 throw std::runtime_error("failed to initialize memory module");
             }
         }
@@ -373,7 +382,7 @@ llama_context::llama_context(
                 GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
                 const int il = std::stoi(n->name + prefix_len);
                 ggml_backend_dev_t device_kv = model.dev_layer(il);
-                if (device_fa != device_kv) {
+                if (device_fa != device_kv && ! cparams.enable_pipo) {
                     LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",
                         __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
@@ -447,19 +456,19 @@ llama_context::llama_context(
         // reserve pipo dynamic layer
         {
             if (params.flash_attn_type == LLAMA_FLASH_ATTN_TYPE_AUTO) {
-                auto * gf = graph_reserve_pipo(1, n_seqs, n_outputs, mctx.get(), true);
+                auto * gf = graph_reserve_pipo(1, n_seqs, n_outputs, mctx_layer.get(), true);
                 if (!gf) {
                     throw std::runtime_error("failed to split graph for Flash Attention check");
                 }
             }
             {
 
-                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx_layer.get());
                 if (!gf) {
                     if (pipeline_parallel) {
                         LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                         sched_layer.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload, false, 0, 0));
-                        gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                        gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx_layer.get());
                     }
                     if (!gf) {
                         throw std::runtime_error("failed to allocate compute pp buffers");
@@ -467,19 +476,21 @@ llama_context::llama_context(
                 }
             }
             {
-                auto * gf = graph_reserve_pipo(n_seqs, n_seqs, n_seqs, mctx.get());
+                auto * gf = graph_reserve_pipo(n_seqs, n_seqs, n_seqs, mctx_layer.get());
                 if (!gf) {
                     throw std::runtime_error("failed to allocate compute tg buffers");
                 }
             }
             {
-                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx.get());
+                auto * gf = graph_reserve_pipo(n_tokens, n_seqs, n_tokens, mctx_layer.get());
                 if (!gf) {
                     throw std::runtime_error("failed to allocate compute pp buffers");
                 }
             }
         }
 
+        std::vector<size_t> pipo_layer_backend_buf_exp_size(backend_ptrs.size()); // expected buffer sizes
+        
         for (size_t i = 0; i < backend_ptrs.size(); ++i) {
             ggml_backend_t             backend = backend_ptrs[i];
             ggml_backend_buffer_type_t buft    = backend_buft[i];
@@ -488,6 +499,14 @@ llama_context::llama_context(
             }
             if (backend_buf_exp_size[i] > 1) {
                 LLAMA_LOG_INFO("%s: %10s compute buffer size = %8.2f MiB\n", __func__,
+                        ggml_backend_buft_name(buft),
+                        backend_buf_exp_size[i] / 1024.0 / 1024.0);
+            }
+            
+            pipo_layer_backend_buf_exp_size[i] = ggml_backend_sched_get_buffer_size(sched_layer.get(), backend);
+            
+            if (backend_buf_exp_size[i] > 1) {
+                LLAMA_LOG_INFO("pipo_layer %s: %10s compute buffer size = %8.2f MiB\n", __func__,
                         ggml_backend_buft_name(buft),
                         backend_buf_exp_size[i] / 1024.0 / 1024.0);
             }

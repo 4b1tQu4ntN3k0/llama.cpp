@@ -2797,7 +2797,9 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
-    // return load_tensors_pipo(ml);
+    if(params.enable_pipo){
+        return load_tensors_pipo(ml);
+    }
     const auto & split_mode   = params.split_mode;
     const auto & n_gpu_layers = params.n_gpu_layers;
     const auto & use_mlock    = params.use_mlock;
@@ -7575,6 +7577,36 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
     }
 
     return layers[il].rope_short;
+}
+
+llama_memory_i * llama_model::create_memory_layer(const llama_memory_params & params, const llama_cparams & cparams) const {
+    llama_memory_i * res;
+    switch (arch) {
+        // Models that need specific instantiation should be handled in the
+        // switch statement
+        case LLM_ARCH_QWEN3: {
+            GGML_ASSERT(!hparams.is_swa_any());
+
+            res = new llama_kv_cache(
+                    *this,
+                    params.type_k,
+                    params.type_v,
+                    !cparams.flash_attn,
+                    cparams.offload_kqv,
+                    cparams.kv_unified,
+                    cparams.n_ctx_seq,
+                    cparams.n_seq_max,
+                    1,
+                    hparams.n_swa,
+                    hparams.swa_type,
+                    nullptr,
+                    nullptr);
+        } break;
+        default:
+            GGML_ASSERT(false);
+    }
+        
+    return res;
 }
 
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {

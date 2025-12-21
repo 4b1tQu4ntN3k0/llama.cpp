@@ -521,6 +521,7 @@ struct llama_model {
 
     // TODO: move this to new llm_arch_model_i interface
     llama_memory_i * create_memory(const llama_memory_params & params, const llama_cparams & cparams) const;
+    llama_memory_i * create_memory_layer(const llama_memory_params & params, const llama_cparams & cparams) const;
 
     // TODO: move this to new llm_arch_model_i interface
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
