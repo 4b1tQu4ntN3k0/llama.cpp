@@ -287,6 +287,7 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
+        memory_layer.reset(model.create_memory_layer(params_mem, cparams));
     }
 
     // init backends
@@ -451,7 +452,7 @@ void llama_context::sched_reserve() {
             GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
             const int il = std::stoi(n->name + prefix_len);
             ggml_backend_dev_t device_kv = model.dev_layer(il);
-            if (device_fa != device_kv) {
+            if (device_fa != device_kv && ! cparams.enable_pipo) {
                 LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",
                         __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
