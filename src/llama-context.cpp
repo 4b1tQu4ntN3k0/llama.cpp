@@ -1552,43 +1552,6 @@ ggml_cgraph * llama_context::graph_reserve_pipo(uint32_t n_tokens, uint32_t n_se
     return gf;
 }
 
-ggml_cgraph * llama_context::graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only) {
-    LLAMA_LOG_DEBUG("PIPO: %s: reserving a single layer for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
-    GGML_ASSERT(n_outputs >= 1);
-    if (n_tokens % n_seqs != 0) {
-        n_tokens = ((n_tokens + (n_seqs - 1)) / n_seqs) * n_seqs; // round to next multiple of n_seqs
-        n_outputs = std::min(n_outputs, n_tokens);
-
-        LLAMA_LOG_DEBUG("%s: making n_tokens a multiple of n_seqs - n_tokens = %u, n_seqs = %u, n_outputs = %u\n", __func__, n_tokens, n_seqs, n_outputs);
-    }
-
-    ggml_backend_sched_reset(sched_layer.get());
-
-    // store the n_outputs as it is, and restore it afterwards
-    // TODO: not sure if needed, might simplify in the future by removing this
-
-    llama_batch_allocr balloc(model.hparams.n_pos_per_embd());
-    llama_ubatch ubatch = balloc.ubatch_reserve(n_tokens/n_seqs, n_seqs);
-
-    auto * res = gf_dynamic_layer.get();
-
-    const auto gparams = graph_params_layer(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
-
-    res->reset();
-
-    auto * gf = model.build_graph_layer(gparams);
-
-    // initialize scheduler with the specified graph
-    if (split_only) {
-        ggml_backend_sched_split_graph(sched_layer.get(), gf);
-    } else if (!ggml_backend_sched_reserve(sched_layer.get(), gf)) {
-        LLAMA_LOG_ERROR("%s: failed to allocate compute buffers\n", __func__);
-        return nullptr;
-    }
-
-    return gf;
-}
-
 ggml_cgraph * llama_context::graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only, size_t * sizes) {
     LLAMA_LOG_DEBUG("%s: reserving a graph for ubatch with n_tokens = %4u, n_seqs = %2u, n_outputs = %4u\n", __func__, n_tokens, n_seqs, n_outputs);
