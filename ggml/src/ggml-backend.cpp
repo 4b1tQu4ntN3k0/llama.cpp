@@ -935,6 +935,7 @@ int pipo_extract_layer_id(const char * name) {
     bool is_weight = strstr(name, "weight") != NULL;
     bool is_cache = strstr(name, "cache") != NULL;
     bool is_norm = strstr(name, "norm") != NULL;
+    bool is_lout = strstr(name, "l_out") != NULL;
     if (is_weight) {
         sscanf(name, "blk.%d", &layer_id);
         if(layer_id == -1){
@@ -946,6 +947,9 @@ int pipo_extract_layer_id(const char * name) {
     }
     else if (is_norm) {
         sscanf(name, "norm-%d", &layer_id);
+    }
+    else if (is_lout) {
+        sscanf(name, "l_out-%d", &layer_id);
     }
     // else{
     //     char * ptr = strrchr((char *)name, '-');
@@ -968,8 +972,31 @@ bool pipo_need_offload(ggml_backend_sched_t sched, struct ggml_tensor * leaf){
     return false;
 }
 
+bool pipo_need_set_layer_out_backend(ggml_backend_sched_t sched, struct ggml_tensor * node){
+    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
+    int n_static_layers = sched->n_static_layers;
+    
+    int layer_id = pipo_extract_layer_id(node->name);
+    if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) != 0) {
+        // cpu layer
+        return true;
+    }
+    return false;
+
+}
+
 void split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
-    int gpu_backend = 0;
+    int gpu_backend = -1;
+    int cpu_backend = -1;
+    for (int i = 0; i < sched->n_backends; i++) {
+        if(cpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CPU") == 0){
+            cpu_backend = i;
+        }
+        else if(gpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CUDA0") == 0){
+            gpu_backend = i;
+        }
+    }
+    
 
     for (int i = 0; i < graph->n_leafs; i++) {
         struct ggml_tensor * leaf = graph->leafs[i];
@@ -987,6 +1014,10 @@ void split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
         if(pipo_need_offload(sched, node)) {
             // move to gpu
             *leaf_backend_id = gpu_backend;
+        }
+        else if(strstr(node->name, "l_out") != NULL && pipo_need_set_layer_out_backend(sched, node)){
+            // fix CPU l_out
+            *leaf_backend_id = cpu_backend;
         }
     }
 

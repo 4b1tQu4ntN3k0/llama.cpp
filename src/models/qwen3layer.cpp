@@ -7,9 +7,9 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
     GGML_ASSERT(n_embd_head == hparams.n_rot);
 
     ggml_tensor * cur;
-    ggml_tensor * inpL;
+	ggml_tensor * inpL_base;
 
-    inpL = build_inp_embd(model.tok_embd);
+    inpL_base = build_inp_embd(model.tok_embd);
 	// inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
@@ -17,9 +17,9 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 
     ggml_tensor * inp_out_ids = build_inp_out_ids();
     
-    
-    ggml_tensor * inpSA = ggml_dup_tensor(ctx0, inpL);
-	ggml_set_name(inpSA, inpL->name);
+	ggml_tensor * inpL = ggml_dup_tensor(ctx0, inpL_base);
+	ggml_tensor * inpSA = inpL;
+	ggml_set_name(inpSA, "layer_input");
 
     struct ggml_tensor * attn_norm = ggml_dup_tensor(ctx0, model.layers[0].attn_norm);
     ggml_set_name(attn_norm, model.layers[0].attn_norm->name);
@@ -118,9 +118,6 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 
 	cur = build_cvec(cur, 0);
 	cb(cur, "l_out", 0);
-
-	// input for next layer
-	inpL = cur;
     
     // cur = inpL;
 
@@ -137,5 +134,5 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
     // cb(cur, "result_output", -1);
     // res->t_logits = cur;
 
-    ggml_build_forward_expand(gf_layer, cur);
+    ggml_build_forward_expand(gf, cur);
 }
