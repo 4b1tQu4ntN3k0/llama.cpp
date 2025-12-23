@@ -287,7 +287,9 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
-        memory_layer.reset(model.create_memory_layer(params_mem, cparams));
+        if(cparams.enable_pipo) {
+            memory_layer.reset(model.create_memory_layer(params_mem, cparams));
+        }
     }
 
     // init backends
@@ -1185,6 +1187,71 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
     auto * res = gf_res_prev.get();
     auto * gf  = res->get_gf();
 
+    // the new graph parameters
+    // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+
+    if (!graph_reuse_disable && res->can_reuse(gparams)) {
+        //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+
+        n_reused++;
+    } else {
+        res->reset();
+
+        ggml_backend_sched_reset(sched.get());
+        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+
+        //const auto t_start_us = ggml_time_us();
+
+        gf = model.build_graph(gparams);
+
+        //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+
+        if (!gf) {
+            LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
+            ret = GGML_STATUS_FAILED;
+            return nullptr;
+        }
+
+        if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+            LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
+            ret = GGML_STATUS_ALLOC_FAILED;
+            return nullptr;
+        }
+    }
+
+    // set the input data for the input tensors
+    {
+        //const auto t_start_us = ggml_time_us();
+
+        res->set_inputs(&ubatch);
+
+        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+    }
+
+    const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    if (status != GGML_STATUS_SUCCESS) {
+        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+        ret = status;
+        return nullptr;
+    }
+
+    ret = GGML_STATUS_SUCCESS;
+
+    return res;
+}
+
+
+llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    if (mctx && !mctx->apply()) {
+        LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
+        ret = GGML_STATUS_FAILED;
+        return nullptr;
+    }
+
+    auto * res = gf_res_prev.get();
+    auto * gf  = res->get_gf();
+
     auto * res_layer = gf_dynamic_layer.get();
     auto * gf_layer  = res_layer->get_gf();
 
@@ -1713,7 +1780,15 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
 
         ggml_status status;
-        const auto * res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        const llm_graph_result * res;
+        if(cparams.enable_pipo){
+            res = process_ubatch_pipo(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        }
+        else{
+            res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        }
+        
+
 
         if (!res) {
             // the last ubatch failed or was aborted -> remove all positions of that ubatch from the memory module
