@@ -110,6 +110,12 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
+    llm_graph_result * process_ubatch_pipo(
+                const llama_ubatch & ubatch,
+                    llm_graph_type   gtype,
+            llama_memory_context_i * mctx,
+                       ggml_status & ret);
+
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
