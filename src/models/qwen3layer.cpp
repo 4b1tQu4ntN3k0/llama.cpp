@@ -21,28 +21,17 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 	ggml_tensor * inpSA = inpL;
 	ggml_set_name(inpSA, "layer_input");
 
-    struct ggml_tensor * attn_norm = ggml_dup_tensor(ctx0, model.layers[0].attn_norm);
-    ggml_set_name(attn_norm, model.layers[0].attn_norm->name);
-    struct ggml_tensor * wq = ggml_dup_tensor(ctx0, model.layers[0].wq);
-    ggml_set_name(wq, model.layers[0].wq->name);
-    struct ggml_tensor * wk = ggml_dup_tensor(ctx0, model.layers[0].wk);
-    ggml_set_name(wk, model.layers[0].wk->name);
-    struct ggml_tensor * wv = ggml_dup_tensor(ctx0, model.layers[0].wv);
-    ggml_set_name(wv, model.layers[0].wv->name);
-    struct ggml_tensor * attn_q_norm = ggml_dup_tensor(ctx0, model.layers[0].attn_q_norm);
-    ggml_set_name(attn_q_norm, model.layers[0].attn_q_norm->name);
-    struct ggml_tensor * attn_k_norm = ggml_dup_tensor(ctx0, model.layers[0].attn_k_norm);
-    ggml_set_name(attn_k_norm, model.layers[0].attn_k_norm->name);
-    struct ggml_tensor * wo = ggml_dup_tensor(ctx0, model.layers[0].wo);
-    ggml_set_name(wo, model.layers[0].wo->name);
-    struct ggml_tensor * ffn_norm = ggml_dup_tensor(ctx0, model.layers[0].ffn_norm);
-    ggml_set_name(ffn_norm, model.layers[0].ffn_norm->name);
-    struct ggml_tensor * ffn_up = ggml_dup_tensor(ctx0, model.layers[0].ffn_up);
-    ggml_set_name(ffn_up, model.layers[0].ffn_up->name);
-    struct ggml_tensor * ffn_gate = ggml_dup_tensor(ctx0, model.layers[0].ffn_gate);
-    ggml_set_name(ffn_gate, model.layers[0].ffn_gate->name);
-    struct ggml_tensor * ffn_down = ggml_dup_tensor(ctx0, model.layers[0].ffn_down);
-    ggml_set_name(ffn_down, model.layers[0].ffn_down->name);
+    struct ggml_tensor * attn_norm = model.dynamic_layer.attn_norm;
+    struct ggml_tensor * wq = model.dynamic_layer.wq;
+    struct ggml_tensor * wk = model.dynamic_layer.wk;
+    struct ggml_tensor * wv = model.dynamic_layer.wv;
+    struct ggml_tensor * attn_q_norm = model.dynamic_layer.attn_q_norm;
+    struct ggml_tensor * attn_k_norm = model.dynamic_layer.attn_k_norm;
+    struct ggml_tensor * wo = model.dynamic_layer.wo;
+    struct ggml_tensor * ffn_norm = model.dynamic_layer.ffn_norm;
+    struct ggml_tensor * ffn_up = model.dynamic_layer.ffn_up;
+    struct ggml_tensor * ffn_gate = model.dynamic_layer.ffn_gate;
+    struct ggml_tensor * ffn_down = model.dynamic_layer.ffn_down;
 
 
 	// norm
@@ -90,7 +79,7 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 		cb(Vcur, "Vcur", 0);
 
 		cur = build_attn(inp_attn,
-				wo, model.layers[0].bo,
+				wo, model.dynamic_layer.bo,
 				Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0);
 	}
 	if (0 == n_layer - 1 && inp_out_ids) {
