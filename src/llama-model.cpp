@@ -2414,6 +2414,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     int max_n_tensors = ml.n_tensors;
     max_n_tensors += 1;         // duplicated output tensor
     max_n_tensors += n_layer*2; // duplicated rope freq tensors
+    // max_n_tensors += ml.n_tensors / n_layer; //dynamic layer
     const size_t ctx_size = ggml_tensor_overhead()*max_n_tensors;
 
     // define a comparator for the buft -> ctx map to ensure that the order is well-defined:
@@ -2423,8 +2424,17 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
         }
     };
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
+    
+    ggml_init_params params_dynamic_layer = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors / n_layer,
+        /*.mem_buffer =*/ NULL,
+        /*.no_alloc   =*/ true,
+    };
+    ggml_context * ctx_dynamic_layer = ggml_init(params_dynamic_layer);
+    ggml_backend_buffer_type_t buft_dynamic_layer = ggml_backend_dev_buffer_type(devices[0]);
+    // ctx_map.emplace(buft_dynamic_layer, ctx_dynamic_layer);
 
-    auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
+    auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft, bool is_dynamic_layer = false) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
@@ -2442,8 +2452,13 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 
             return ctx;
         }
+        if(is_dynamic_layer){
+            return ctx_dynamic_layer;
+        }
         return it->second.get();
     };
+
+
 
     const auto TENSOR_DUPLICATED   = llama_model_loader::TENSOR_DUPLICATED;
     const auto TENSOR_NOT_REQUIRED = llama_model_loader::TENSOR_NOT_REQUIRED;
@@ -2477,7 +2492,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
-        auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
+        auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags, bool is_dynamic_layer = false) -> ggml_tensor * {
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
             if (!t_meta) {
@@ -2603,7 +2618,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 }
             }
 
-            ggml_context * ctx = ctx_for_buft(buft);
+            ggml_context * ctx = ctx_for_buft(buft, is_dynamic_layer);
 
             // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
             if (flags & TENSOR_DUPLICATED) {
@@ -2651,6 +2666,25 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
+                    {
+                        auto & layer = dynamic_layer;
+                        int i = 0;
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0, true);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0, true);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0, true);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0, true);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0, true);
+
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0, true);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0, true);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0, true);
+                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0, true);
+                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0, true);
+                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0, true);
+                    }
                 } 
                 break;
             default: 
@@ -2664,7 +2698,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
         }
     }
 
-    ml.done_getting_tensors();
+    // ml.done_getting_tensors();
 
     ml.init_mappings(true, use_mlock ? &pimpl->mlock_mmaps : nullptr);
     pimpl->mappings.reserve(ml.mappings.size());
@@ -2785,6 +2819,21 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
             return false;
         }
     }
+
+    {
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx_dynamic_layer, buft_dynamic_layer);
+        llama_buf_map buf_map_dl;
+        buf_map_dl.emplace(0, buf);
+        for (auto & buf : buf_map_dl) {
+            // indicate that this buffer contains weights
+            // this is used by ggml_backend_sched to improve op scheduling: ops that use a weight are preferably scheduled to the backend that contains the weight
+            ggml_backend_buffer_set_usage(buf.second, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        }
+        if(!ml.load_all_data(ctx_dynamic_layer, buf_map_dl, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)){
+            return false;
+        }
+    }
+    
 
     if (use_mmap_buffer) {
         for (auto & mapping : ml.mappings) {
