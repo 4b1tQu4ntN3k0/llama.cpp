@@ -330,7 +330,7 @@ extern "C" {
     GGML_API bool                 ggml_backend_sched_alloc_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph); // returns success
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
-    GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_t sched, struct ggml_cgraph * graph, ggml_backend_sched_t sched_layer);
+    GGML_API enum ggml_status     ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_t sched, struct ggml_cgraph * graph);
     GGML_API void                 ggml_backend_sched_synchronize(ggml_backend_sched_t sched);
 
     // Reset all assignments and allocators - must be called before changing the node backends or allocating a new graph.
@@ -368,6 +368,8 @@ extern "C" {
     // CPU buffer types are always available
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
+
+    GGML_API void ggml_backend_sched_set_pipo_layers(ggml_backend_sched_t sched, const int * layer_ids, int n_layers, struct ggml_cgraph ** layers);
 
 #ifdef  __cplusplus
 }
