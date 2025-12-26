@@ -560,6 +560,11 @@ struct llama_model {
     struct ggml_tensor * dense_2_out_layers_b = nullptr;
     struct ggml_tensor * dense_3_out_layers   = nullptr;
 
+    // pipo weight map
+    using llama_tensor_key = std::pair<llm_tensor, ggml_type>; 
+    std::map<llama_tensor_key, struct ggml_tensor *> weight_map;
+    std::unordered_map<std::string, struct ggml_tensor *> name_weight_map;
+
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
 
@@ -628,7 +633,7 @@ struct llama_model {
 
     // TODO: move this to new llm_arch_model_i interface
     ggml_cgraph * build_graph(const llm_graph_params & params) const;
-    ggml_cgraph * build_graph_layer(const llm_graph_params & params) const;
+    ggml_cgraph * build_graph_layer(const llm_graph_params & params, int layer_id) const;
 
 private:
     llama_model_params params;
