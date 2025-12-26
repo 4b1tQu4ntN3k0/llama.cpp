@@ -2426,7 +2426,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
     
     ggml_init_params params_dynamic_layer = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors / n_layer,
+        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors / n_layer * 2,
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
@@ -2434,7 +2434,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     ggml_backend_buffer_type_t buft_dynamic_layer = ggml_backend_dev_buffer_type(devices[0]);
     // ctx_map.emplace(buft_dynamic_layer, ctx_dynamic_layer);
 
-    auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft, bool is_dynamic_layer = false) -> ggml_context * {
+    auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
@@ -2451,9 +2451,6 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
             ctx_map.emplace(buft, ctx);
 
             return ctx;
-        }
-        if(is_dynamic_layer){
-            return ctx_dynamic_layer;
         }
         return it->second.get();
     };
@@ -2492,7 +2489,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
         ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
 
-        auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags, bool is_dynamic_layer = false) -> ggml_tensor * {
+        auto create_tensor = [&](const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) -> ggml_tensor * {
             ggml_tensor * t_meta = ml.get_tensor_meta(tn.str().c_str());
 
             if (!t_meta) {
@@ -2618,7 +2615,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 }
             }
 
-            ggml_context * ctx = ctx_for_buft(buft, is_dynamic_layer);
+            ggml_context * ctx = ctx_for_buft(buft);
 
             // if duplicated, check if the original tensor was allocated in the same buffer type context and avoid creating a new one
             if (flags & TENSOR_DUPLICATED) {
@@ -2627,6 +2624,16 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                     return t;
                 }
             }
+
+            // pipo check new weight type
+            if(info.layer == LLM_TENSOR_LAYER_REPEATING){
+                llama_tensor_key tensor_k = {tn.tensor, t_meta->type};
+                if(!weight_map.count(tensor_k)){
+                    weight_map[tensor_k] = ml.create_tensor(ctx_dynamic_layer, tn, ne, flags);
+                }
+                name_weight_map[t_meta->name] = weight_map[tensor_k];
+            }
+            
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 
@@ -2666,27 +2673,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
                     }
-                    {
-                        auto & layer = dynamic_layer;
-                        int i = 0;
-
-                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0, true);
-
-                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0, true);
-                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0, true);
-                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0, true);
-                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0, true);
-
-                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0, true);
-                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0, true);
-
-                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0, true);
-                        layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0, true);
-                        layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0, true);
-                        layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0, true);
-                    }
-                } 
-                break;
+                } break;
             default: 
                 throw std::runtime_error("only support qwen3 models now");
         }
@@ -7783,13 +7770,13 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     return res;
 }
 
-ggml_cgraph * llama_model::build_graph_layer(const llm_graph_params & params) const {
+ggml_cgraph * llama_model::build_graph_layer(const llm_graph_params & params, int layer_id) const {
     std::unique_ptr<llm_graph_context> llm;
 
     switch (arch) {
         case LLM_ARCH_QWEN3:
             {
-                llm = std::make_unique<llm_build_qwen3_layer>(*this, params);
+                llm = std::make_unique<llm_build_qwen3_layer>(*this, params, layer_id);
             } break;
         default:
             GGML_ABORT("build_graph_layer fatal error");

@@ -21,6 +21,7 @@
 #include <string.h>
 #include <algorithm>
 #include <vector>
+#include <map>
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -670,6 +671,10 @@ static bool ggml_is_view_op(enum ggml_op op) {
 #define GGML_SCHED_MAX_COPIES 4
 #endif
 
+// #ifndef GGML_SCHED_PIPO_MAX_LAYERS
+// #define GGML_SCHED_PIPO_MAX_LAYERS 150
+// #endif
+
 struct ggml_backend_sched_split {
     int backend_id;
     int i_start;
@@ -708,6 +713,10 @@ struct ggml_backend_sched {
     // copy of the graph with modified inputs
     struct ggml_cgraph graph;
 
+    // pipo layers
+    std::vector<int> layer_ids;
+    std::vector<struct ggml_cgraph *> layers;
+
     // graph splits
     struct ggml_backend_sched_split * splits;
     int n_splits;
@@ -744,6 +753,7 @@ struct ggml_backend_sched {
     // int n_layers = 0;
     int n_cpu_layers_per_split = 3;
     int n_static_layers = 10;
+    
 };
 
 #define hash_id(tensor) ggml_hash_find_or_insert(&sched->hash_set, tensor)
@@ -1085,14 +1095,14 @@ void pipo_split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
 }
 
 void pipo_print_tensor_backend(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
-    return;
+    // return;
     GGML_LOG_DEBUG("\n\tpipo_print_tensor_backend");
     for (int i = 0; i < graph->n_leafs; i++) {
         struct ggml_tensor * leaf = graph->leafs[i];
         int * leaf_backend_id = &tensor_backend_id(leaf);
         if(* leaf_backend_id != -1){
             ggml_backend_t split_backend = sched->backends[*leaf_backend_id];
-            GGML_LOG_DEBUG("\n%s: %s", leaf->name, ggml_backend_name(split_backend));
+            GGML_LOG_DEBUG("\n%s: %s %d", leaf->name, ggml_backend_name(split_backend), leaf->type);
         }
     }
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -1100,7 +1110,7 @@ void pipo_print_tensor_backend(ggml_backend_sched_t sched, struct ggml_cgraph * 
         int * node_backend_id = &tensor_backend_id(node);
         if(* node_backend_id != -1){
             ggml_backend_t split_backend = sched->backends[*node_backend_id];
-            GGML_LOG_DEBUG("\n%s: %s", node->name, ggml_backend_name(split_backend));
+            GGML_LOG_DEBUG("\n%s: %s %d", node->name, ggml_backend_name(split_backend), node->type);
         }
     }
 }
@@ -1126,7 +1136,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         GGML_ABORT("%s: failed to initialize context\n", __func__);
     }
 
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
     // pipo config
     if(sched->enable_pipo){
         split(sched, graph);
@@ -1142,7 +1152,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             *leaf_backend_id = ggml_backend_sched_backend_id_from_cur(sched, leaf);
         }
     }
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
 
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
@@ -1170,7 +1180,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 #endif
         }
     }
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
 
     // pass 2: expand current backend assignments
     // assign the same backend to adjacent nodes
@@ -1251,7 +1261,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             }
         }
     }
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
 
     // pass 3: upgrade nodes to higher prio backends with compatible buffer types
     // if the tensor is already in the same buffer type (*) as another higher priority backend, we should move it there
@@ -1313,7 +1323,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             }
         }
     }
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
 
     // pass 4: assign backends to remaining src from dst and view_src
     for (int i = 0; i < graph->n_nodes; i++) {
@@ -1347,7 +1357,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         GGML_ASSERT(*cur_backend_id != -1);
     }
 
-    pipo_print_tensor_backend(sched, graph);
+    // pipo_print_tensor_backend(sched, graph);
 
     // pass 5: split graph, find tensors that need to be copied
     {
@@ -1640,7 +1650,7 @@ static bool ggml_backend_sched_alloc_splits(ggml_backend_sched_t sched) {
     return true;
 }
 
-static enum ggml_status pipo_send_weight(ggml_backend_sched_t sched, struct ggml_backend_sched_split * src, struct ggml_backend_sched_split * dst){
+static enum ggml_status pipo_send_weight(ggml_backend_sched_t sched, struct ggml_backend_sched_split * src, struct ggml_cgraph * dst){
     std::vector<struct ggml_tensor *> src_tensors;
     std::vector<struct ggml_tensor *> dst_tensors;
     for(int i = 0; i < src->graph.n_nodes; i++){
@@ -1652,9 +1662,9 @@ static enum ggml_status pipo_send_weight(ggml_backend_sched_t sched, struct ggml
             }
         }
     }
-    for(int i = 0; i < dst->graph.n_nodes; i++){
+    for(int i = 0; i < dst->n_nodes; i++){
         for(int j=0; j<GGML_MAX_SRC;j++){
-            auto src_tensor = dst->graph.nodes[i]->src[j];
+            auto src_tensor = dst->nodes[i]->src[j];
             if(src_tensor == nullptr) continue;
             if(ggml_backend_buffer_get_usage(src_tensor->buffer) == GGML_BACKEND_BUFFER_USAGE_WEIGHTS){
                 dst_tensors.push_back(src_tensor);
@@ -1663,7 +1673,11 @@ static enum ggml_status pipo_send_weight(ggml_backend_sched_t sched, struct ggml
     }
 
     auto cmp_name = [](const ggml_tensor * a, const ggml_tensor * b) {
-        return strcmp(a->name, b->name) < 0;
+        auto get_suffix = [](const char * name) -> const char * {
+            const char * p = strrchr(name, '.');
+            return p ? p + 1 : name;
+        };
+        return strcmp(get_suffix(a->name), get_suffix(b->name)) < 0;
     };
     std::sort(src_tensors.begin(), src_tensors.end(), cmp_name);
     std::sort(dst_tensors.begin(), dst_tensors.end(), cmp_name);
@@ -1678,7 +1692,7 @@ static enum ggml_status pipo_send_weight(ggml_backend_sched_t sched, struct ggml
 static enum ggml_status pipo_send_cache(){}
 static enum ggml_status pipo_save_cache(){}
 
-static enum ggml_status ggml_backend_sched_compute_splits_sync_pipo(ggml_backend_sched_t sched, ggml_backend_sched_t layer_sched) {
+static enum ggml_status ggml_backend_sched_compute_splits_sync_pipo(ggml_backend_sched_t sched) {
     GGML_ASSERT(sched);
     struct ggml_backend_sched_split * splits = sched->splits;
 
@@ -1686,9 +1700,9 @@ static enum ggml_status ggml_backend_sched_compute_splits_sync_pipo(ggml_backend
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
-    struct ggml_backend_sched_split * dynamic_split = &layer_sched->splits[0];
 
     int gpu_split_cnt = 0;
+    int layer_cnt = 0;
 
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
@@ -1697,9 +1711,11 @@ static enum ggml_status ggml_backend_sched_compute_splits_sync_pipo(ggml_backend
         if(split_backend_id == 0) gpu_split_cnt++;
         bool is_dynamic_split = gpu_split_cnt > 1 && split_backend_id == 0;
         if(is_dynamic_split){
+            auto dynamic_split = sched->layers[layer_cnt++];
             pipo_send_weight(sched, split, dynamic_split);
         }
     }
+    return GGML_STATUS_SUCCESS;
 
 }
 
@@ -2109,10 +2125,8 @@ enum ggml_status ggml_backend_sched_graph_compute_async(ggml_backend_sched_t sch
     return ggml_backend_sched_compute_splits(sched);
 }
 
-enum ggml_status ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_t sched, struct ggml_cgraph * graph, ggml_backend_sched_t sched_layer) {
+enum ggml_status ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
     GGML_ASSERT(sched);
-    GGML_ASSERT(sched_layer);
-    GGML_ASSERT(sched_layer->is_alloc);
     if (!sched->is_reset && !sched->is_alloc) {
         ggml_backend_sched_reset(sched);
     }
@@ -2123,7 +2137,7 @@ enum ggml_status ggml_backend_sched_graph_compute_async_pipo(ggml_backend_sched_
         }
     }
 
-    return ggml_backend_sched_compute_splits_sync_pipo(sched, sched_layer);
+    return ggml_backend_sched_compute_splits_sync_pipo(sched);
 }
 
 void ggml_backend_sched_synchronize(ggml_backend_sched_t sched) {
@@ -2587,4 +2601,9 @@ static ggml_backend_buffer_type_t ggml_backend_cpu_buffer_from_ptr_type(void) {
 ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) {
     GGML_ASSERT((uintptr_t)ptr % TENSOR_ALIGNMENT == 0 && "buffer pointer must be aligned");
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
+}
+
+void ggml_backend_sched_set_pipo_layers(ggml_backend_sched_t sched, const int * layer_ids, int n_layers, struct ggml_cgraph ** layers) {
+    sched->layer_ids.assign(layer_ids, layer_ids + n_layers);
+    sched->layers.assign(layers, layers + n_layers);
 }

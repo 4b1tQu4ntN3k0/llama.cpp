@@ -422,7 +422,7 @@ struct llm_build_qwen3 : public llm_graph_context {
 };
 
 struct llm_build_qwen3_layer : public llm_graph_context {
-    llm_build_qwen3_layer(const llama_model & model, const llm_graph_params & params);
+    llm_build_qwen3_layer(const llama_model & model, const llm_graph_params & params, int layer_id);
 };
 
 struct llm_build_qwen3moe : public llm_graph_context {
