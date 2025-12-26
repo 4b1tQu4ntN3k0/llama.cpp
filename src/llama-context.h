@@ -134,6 +134,7 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
+        llama_memory_context_i * mctx_layer,
                        ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);
@@ -241,18 +242,12 @@ public:
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
-    ggml_cgraph * graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
+    ggml_status graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
 private:
     llm_graph_params graph_params(
-                        llm_graph_result * res,
-                      const llama_ubatch & ubatch,
-            const llama_memory_context_i * mctx,
-                          llm_graph_type   gtype) const;
-
-    llm_graph_params graph_params_layer(
                         llm_graph_result * res,
                       const llama_ubatch & ubatch,
             const llama_memory_context_i * mctx,
@@ -335,7 +330,6 @@ private:
     std::vector<swap_info> output_swaps;
 
     ggml_backend_sched_ptr sched;
-    ggml_backend_sched_ptr sched_layer;
 
     bool sched_need_reserve = true;
 
@@ -360,7 +354,6 @@ private:
 
     llm_graph_result_ptr gf_res_prev;
     llm_graph_result_ptr gf_res_reserve;
-    llm_graph_result_ptr gf_dynamic_layer;
 
     // host buffer for the model output (logits and embeddings)
     ggml_backend_buffer_ptr buf_output;
@@ -383,4 +376,12 @@ private:
     mutable int32_t n_eval   = 0; // number of eval calls
 
     mutable int32_t n_reused = 0; // number of times the previous graph was reused
+
+    // pipo dynamic layers
+    std::vector<int> layer_ids;
+    int pipo_n_cpu_layers;
+    int pipo_n_cpu_layers_pre;
+    std::vector<llm_graph_result_ptr> gf_res_prev_layers;
+    std::vector<llm_graph_result_ptr> gf_res_reserve_layers;
+
 };
