@@ -1,6 +1,6 @@
 #include "models.h"
 
-llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const llm_graph_params & params, int layer_id) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
@@ -20,43 +20,32 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 	ggml_tensor * inpL = ggml_dup_tensor(ctx0, inpL_base);
 	ggml_tensor * inpSA = inpL;
 	ggml_set_name(inpSA, "layer_input");
-
-    struct ggml_tensor * attn_norm = model.dynamic_layer.attn_norm;
-    struct ggml_tensor * wq = model.dynamic_layer.wq;
-    struct ggml_tensor * wk = model.dynamic_layer.wk;
-    struct ggml_tensor * wv = model.dynamic_layer.wv;
-    struct ggml_tensor * attn_q_norm = model.dynamic_layer.attn_q_norm;
-    struct ggml_tensor * attn_k_norm = model.dynamic_layer.attn_k_norm;
-    struct ggml_tensor * wo = model.dynamic_layer.wo;
-    struct ggml_tensor * ffn_norm = model.dynamic_layer.ffn_norm;
-    struct ggml_tensor * ffn_up = model.dynamic_layer.ffn_up;
-    struct ggml_tensor * ffn_gate = model.dynamic_layer.ffn_gate;
-    struct ggml_tensor * ffn_down = model.dynamic_layer.ffn_down;
-
+	
+	const llama_layer& layer = model.layers[layer_id];
 
 	// norm
 	cur = build_norm(inpL,
-			attn_norm, NULL,
+			model.name_weight_map.at(std::string(layer.attn_norm->name)), NULL,
 			LLM_NORM_RMS, 0);
 	cb(cur, "attn_norm", 0);
 
 	// self-attention
 	{
 		// compute Q and K and RoPE them
-		ggml_tensor * Qcur = build_lora_mm(wq, cur);
+		ggml_tensor * Qcur = build_lora_mm(model.name_weight_map.at(std::string(layer.wq->name)), cur);
 		cb(Qcur, "Qcur", 0);
 
-		ggml_tensor * Kcur = build_lora_mm(wk, cur);
+		ggml_tensor * Kcur = build_lora_mm(model.name_weight_map.at(std::string(layer.wk->name)), cur);
 		cb(Kcur, "Kcur", 0);
 
-		ggml_tensor * Vcur = build_lora_mm(wv, cur);
+		ggml_tensor * Vcur = build_lora_mm(model.name_weight_map.at(std::string(layer.wv->name)), cur);
 		cb(Vcur, "Vcur", 0);
 
 		Qcur = ggml_reshape_3d(ctx0, Qcur, n_embd_head, n_head,    n_tokens);
 		Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, n_head_kv, n_tokens);
 		Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, n_head_kv, n_tokens);
 
-		Qcur = build_norm(Qcur, attn_q_norm, NULL, LLM_NORM_RMS, 0);
+		Qcur = build_norm(Qcur, model.name_weight_map.at(std::string(layer.attn_q_norm->name)), NULL, LLM_NORM_RMS, 0);
 		cb(Qcur, "Qcur_normed", 0);
 
 		Qcur = ggml_rope_ext(
@@ -65,7 +54,7 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 				ext_factor, attn_factor, beta_fast, beta_slow
 				);
 
-		Kcur = build_norm(Kcur, attn_k_norm, NULL, LLM_NORM_RMS, 0);
+		Kcur = build_norm(Kcur, model.name_weight_map.at(std::string(layer.attn_k_norm->name)), NULL, LLM_NORM_RMS, 0);
 		cb(Kcur, "Kcur_normed", 0);
 
 		Kcur = ggml_rope_ext(
@@ -79,7 +68,7 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 		cb(Vcur, "Vcur", 0);
 
 		cur = build_attn(inp_attn,
-				wo, model.dynamic_layer.bo,
+				model.name_weight_map.at(std::string(layer.wo->name)), nullptr,
 				Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0);
 	}
 	if (0 == n_layer - 1 && inp_out_ids) {
@@ -91,14 +80,14 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 
 	// feed-forward network
 	cur = build_norm(ffn_inp,
-			ffn_norm, NULL,
+			model.name_weight_map.at(std::string(layer.ffn_norm->name)), NULL,
 			LLM_NORM_RMS, 0);
 	cb(cur, "ffn_norm", 0);
 
 	cur = build_ffn(cur,
-			ffn_up,   NULL, NULL,
-			ffn_gate, NULL, NULL,
-			ffn_down, NULL, NULL,
+			model.name_weight_map.at(std::string(layer.ffn_up->name)),   NULL, NULL,
+			model.name_weight_map.at(std::string(layer.ffn_gate->name)), NULL, NULL,
+			model.name_weight_map.at(std::string(layer.ffn_down->name)), NULL, NULL,
 			NULL,
 			LLM_FFN_SILU, LLM_FFN_PAR, 0);
 	cb(cur, "ffn_out", 0);
