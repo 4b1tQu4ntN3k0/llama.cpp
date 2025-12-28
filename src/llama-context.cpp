@@ -1273,11 +1273,12 @@ llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatc
 
         n_reused++;
     } else {
+        int n_gpu_layers = model.n_gpu_layers();
 
         // layers
         layer_ids.clear();
-        for(int i = cparams.n_cpu_layers_per_split; i + model.params.n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
-            layer_ids.push_back(i + model.params.n_gpu_layers);
+        for(int i = cparams.n_cpu_layers_per_split; i + n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
+            layer_ids.push_back(i + n_gpu_layers);
         }
 
         std::vector<ggml_cgraph *> layers;
@@ -1322,6 +1323,10 @@ llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatc
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
         res->set_inputs(&ubatch);
+        for(auto id:layer_ids){
+            auto * res_layer = gf_res_prev_layers[id].get();
+            res_layer->set_inputs(&ubatch);
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
