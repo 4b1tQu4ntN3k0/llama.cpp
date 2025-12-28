@@ -10,12 +10,16 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 	ggml_tensor * inpL_base;
 
     inpL_base = build_inp_embd(model.tok_embd);
+	res->inputs.clear();
 	// inp_pos - contains the positions
     ggml_tensor * inp_pos = build_inp_pos();
 
     auto * inp_attn = build_attn_inp_kv();
 
-    ggml_tensor * inp_out_ids = build_inp_out_ids();
+    ggml_tensor * inp_out_ids = nullptr;
+	if (layer_id == n_layer - 1){
+		inp_out_ids = build_inp_out_ids();
+	}
     
 	ggml_tensor * inpL = ggml_dup_tensor(ctx0, inpL_base);
 	ggml_tensor * inpSA = inpL;
@@ -71,9 +75,9 @@ llm_build_qwen3_layer::llm_build_qwen3_layer(const llama_model & model, const ll
 				model.name_weight_map.at(std::string(layer.wo->name)), nullptr,
 				Qcur, Kcur, Vcur, nullptr, nullptr, nullptr, 1.0f/sqrtf(float(n_embd_head)), 0);
 	}
-	if (0 == n_layer - 1 && inp_out_ids) {
-			cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
-			inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
+	if (layer_id == n_layer - 1 && inp_out_ids) {
+		cur   = ggml_get_rows(ctx0,   cur, inp_out_ids);
+		inpSA = ggml_get_rows(ctx0, inpSA, inp_out_ids);
 	}
 	ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
 	cb(ffn_inp, "ffn_inp", 0);
