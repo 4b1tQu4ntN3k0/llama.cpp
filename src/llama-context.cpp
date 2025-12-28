@@ -332,7 +332,7 @@ llama_context::llama_context(
                 gf_res_prev_layers.emplace_back(new llm_graph_result(max_nodes / model.hparams.n_layer));
             }
             sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload,
-                                                cparams.enable_pipo, cparams.n_cpu_layers_per_split, model.params.n_gpu_layers));
+                                                cparams.enable_pipo, cparams.n_cpu_layers_per_split, model.n_gpu_layers()));
         }
         else{
             sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, pipeline_parallel, cparams.op_offload, false, 0, 0));
@@ -961,11 +961,12 @@ llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatc
 
         n_reused++;
     } else {
+        int n_gpu_layers = model.n_gpu_layers();
 
         // layers
         layer_ids.clear();
-        for(int i = cparams.n_cpu_layers_per_split; i + model.params.n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
-            layer_ids.push_back(i + model.params.n_gpu_layers);
+        for(int i = cparams.n_cpu_layers_per_split; i + n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
+            layer_ids.push_back(i + n_gpu_layers);
         }
 
         std::vector<ggml_cgraph *> layers;
@@ -1009,6 +1010,10 @@ llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatc
         //const auto t_start_us = ggml_time_us();
 
         res->set_inputs(&ubatch);
+        for(auto id:layer_ids){
+            auto * res_layer = gf_res_prev_layers[id].get();
+            res_layer->set_inputs(&ubatch);
+        }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
