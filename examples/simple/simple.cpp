@@ -10,6 +10,62 @@ static void print_usage(int, char ** argv) {
     printf("\n");
 }
 
+
+void dum_tensor(ggml_tensor* input){
+    
+    FILE * fp = fopen("logs/input_dump.log", "a");
+    if (fp) {
+        fprintf(fp, "input: %s type: %s shape: %ld %ld %ld %ld\n", input->name, ggml_type_name(input->type), input->ne[0], input->ne[1], input->ne[2], input->ne[3]);
+        int64_t n_elements = ggml_nelements(input);
+        int n_print = n_elements < 20 ? (int)n_elements : 20;
+
+        if (input->type == GGML_TYPE_F32) {
+            float data[20];
+            ggml_backend_tensor_get(input, data, 0, sizeof(float) * n_print);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%f ", data[i]);
+            }
+            fprintf(fp, "\n");
+        } else if (input->type == GGML_TYPE_I32) {
+            int32_t data[20];
+            ggml_backend_tensor_get(input, data, 0, sizeof(int32_t) * n_print);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%d ", data[i]);
+            }
+            fprintf(fp, "\n");
+        } else if (input->type == GGML_TYPE_I64) {
+            int64_t data[20];
+            ggml_backend_tensor_get(input, data, 0, sizeof(int64_t) * n_print);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%ld ", data[i]);
+            }
+            fprintf(fp, "\n");
+        } else if (input->type == GGML_TYPE_F16) {
+            ggml_fp16_t data[20];
+            ggml_backend_tensor_get(input, data, 0, sizeof(ggml_fp16_t) * n_print);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%f ", ggml_fp16_to_fp32(data[i]));
+            }
+            fprintf(fp, "\n");
+        }
+        fclose(fp);
+    }
+        
+}
+
+static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data) {
+    if (ask) {
+        // Return true to observe this tensor
+        // You can filter by name here, e.g.:
+        return strstr(t->name, "cache")!=NULL;
+        // return true; 
+    }
+    
+    dum_tensor(t);
+    
+    return true;
+}
+
 int main(int argc, char ** argv) {
     // path to the model gguf file
     std::string model_path;
@@ -73,6 +129,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
+    bool enable_pipo = true;
 
     // load dynamic backends
 
@@ -82,7 +139,7 @@ int main(int argc, char ** argv) {
 
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ngl;
-    model_params.enable_pipo = true;
+    model_params.enable_pipo = enable_pipo;
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 
@@ -116,8 +173,11 @@ int main(int argc, char ** argv) {
 
     ctx_params.op_offload = false;
 
-    ctx_params.enable_pipo = true;
+    ctx_params.enable_pipo = enable_pipo;
     ctx_params.n_cpu_layers_per_split = 3;
+
+    ctx_params.cb_eval = my_eval_callback;
+    ctx_params.cb_eval_user_data = NULL;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
@@ -132,6 +192,8 @@ int main(int argc, char ** argv) {
     sparams.no_perf = false;
     llama_sampler * smpl = llama_sampler_chain_init(sparams);
 
+    // llama_sampler_chain_add(smpl, llama_sampler_init_temp(0.8));
+    // llama_sampler_chain_add(smpl, llama_sampler_init_dist(1234));
     llama_sampler_chain_add(smpl, llama_sampler_init_greedy());
 
     // print the prompt token-by-token

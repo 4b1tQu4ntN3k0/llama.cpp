@@ -12,7 +12,11 @@ struct llama_cparams {
     uint32_t n_batch;
     uint32_t n_ubatch;
     uint32_t n_seq_max;
+    
+    // pipo params
     uint32_t n_cpu_layers_per_split;
+    uint32_t n_gpu_layers;
+    
     int32_t  n_threads;       // number of threads to use for generation
     int32_t  n_threads_batch; // number of threads to use for batch processing
 

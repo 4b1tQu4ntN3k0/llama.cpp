@@ -120,7 +120,10 @@ public:
                      uint32_t   n_pad,
                      uint32_t   n_swa,
                llama_swa_type   swa_type,
-                    bool single_layer);
+        const layer_filter_cb & filter,
+        const  layer_reuse_cb & reuse,
+                     uint32_t   n_gpu_layers,
+                     uint32_t   n_cpu_layers_per_split);
 
     ~llama_kv_cache() = default;
 
@@ -213,9 +216,28 @@ public:
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
 
+    // pipo api
+    ggml_tensor * get_k_tensor(int32_t il) const;
+    ggml_tensor * get_v_tensor(int32_t il) const;
+    ggml_tensor * get_dk_tensor() const;
+    ggml_tensor * get_dv_tensor() const;
+    // // get views of the current state of the cache
+    // ggml_tensor * get_dynamic_k(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+    // ggml_tensor * get_dynamic_v(ggml_context * ctx, int32_t il, uint32_t n_kv, const slot_info & sinfo) const;
+
+    // // store k_cur and v_cur in the cache based on the provided head location
+    // ggml_tensor * cpy_dynamic_k(ggml_context * ctx, ggml_tensor * k_cur, ggml_tensor * k_idxs, int32_t il, const slot_info & sinfo) const;
+    // ggml_tensor * cpy_dynamic_v(ggml_context * ctx, ggml_tensor * v_cur, ggml_tensor * v_idxs, int32_t il, const slot_info & sinfo) const;
+
+
 private:
     const llama_model & model;
     const llama_hparams & hparams;
+
+    // pipo params
+    bool enable_pipo;
+    int n_gpu_layers;
+    int n_cpu_layers_per_split;
 
     struct kv_layer {
         // layer index in the model
@@ -262,6 +284,7 @@ private:
     stream_copy_info sc_info;
 
     std::vector<kv_layer> layers;
+    kv_layer dynamic_layer;
 
     // model layer id -> KV cache layer id
     std::unordered_map<int32_t, int32_t> map_layer_ids;
@@ -366,6 +389,11 @@ public:
     void set_input_k_shift   (ggml_tensor * dst) const;
     void set_input_kq_mask   (ggml_tensor * dst, const llama_ubatch * ubatch, bool causal_attn) const;
     void set_input_pos_bucket(ggml_tensor * dst, const llama_ubatch * ubatch) const;
+
+    ggml_tensor * get_k_tensor(int32_t il) const;
+    ggml_tensor * get_v_tensor(int32_t il) const;
+    ggml_tensor * get_dk_tensor() const;
+    ggml_tensor * get_dv_tensor() const;
 
 private:
     llama_memory_status status;

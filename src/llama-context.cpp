@@ -162,6 +162,7 @@ llama_context::llama_context(
     // pipo params
     cparams.enable_pipo = params.enable_pipo;
     cparams.n_cpu_layers_per_split = params.n_cpu_layers_per_split;
+    cparams.n_gpu_layers = model.n_gpu_layers();
 
     {
         const char * LLAMA_GRAPH_REUSE_DISABLE = getenv("LLAMA_GRAPH_REUSE_DISABLE");
@@ -278,9 +279,6 @@ llama_context::llama_context(
         };
 
         memory.reset(model.create_memory(params_mem, cparams));
-        if(cparams.enable_pipo) {
-            memory_layer.reset(model.create_memory_layer(params_mem, cparams));
-        }
     }
 
     // init backends
@@ -1167,6 +1165,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
             ret = GGML_STATUS_ALLOC_FAILED;
             return nullptr;
         }
+
+        if(cparams.enable_pipo){
+            for(int i=0;i<res->src_tensors.size();i++){
+                ggml_backend_sched_set_pipo_tensor_map(sched.get(), res->src_tensors[i].data(), res->dst_tensors[i].data(), i, res->src_tensors[i].size());
+            }
+        }
     }
 
     // set the input data for the input tensors
@@ -1191,97 +1195,92 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 }
 
 
-llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, llama_memory_context_i * mctx_layer, ggml_status & ret) {
-    if (mctx && !mctx->apply()) {
-        LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
-        ret = GGML_STATUS_FAILED;
-        return nullptr;
-    }
-    if (mctx_layer && !mctx_layer->apply()) {
-        LLAMA_LOG_ERROR("%s: failed to apply memory_layer context\n", __func__);
-        ret = GGML_STATUS_FAILED;
-        return nullptr;
-    }
+llm_graph_result * llama_context::process_ubatch_pipo(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+//     if (mctx && !mctx->apply()) {
+//         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
+//         ret = GGML_STATUS_FAILED;
+//         return nullptr;
+//     }
 
-    auto * res = gf_res_prev.get();
-    auto * gf  = res->get_gf();
+//     auto * res = gf_res_prev.get();
+//     auto * gf  = res->get_gf();
 
-    // the new graph parameters
-    // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+//     // the new graph parameters
+//     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
+//     const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
-    if (!graph_reuse_disable && res->can_reuse(gparams) && pipo_n_cpu_layers == pipo_n_cpu_layers_pre) {
-        //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
+//     if (!graph_reuse_disable && res->can_reuse(gparams) && pipo_n_cpu_layers == pipo_n_cpu_layers_pre) {
+//         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
 
-        n_reused++;
-    } else {
-        int n_gpu_layers = model.n_gpu_layers();
+//         n_reused++;
+//     } else {
+//         int n_gpu_layers = model.n_gpu_layers();
 
-        // layers
-        layer_ids.clear();
-        for(int i = cparams.n_cpu_layers_per_split; i + n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
-            layer_ids.push_back(i + n_gpu_layers);
-        }
+//         // layers
+//         layer_ids.clear();
+//         for(int i = cparams.n_cpu_layers_per_split; i + n_gpu_layers < model.hparams.n_layer; i += cparams.n_cpu_layers_per_split + 1){
+//             layer_ids.push_back(i + n_gpu_layers);
+//         }
 
-        std::vector<ggml_cgraph *> layers;
-        for(auto id:layer_ids){
-            auto * res_layer = gf_res_prev_layers[id].get();
-            res_layer->reset();
-            ggml_backend_sched_reset(sched.get());
-            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
-            const auto gparams_layer = graph_params(res_layer, ubatch, mctx_layer, gtype);
-            auto gf_layer = model.build_graph_layer(gparams_layer,id);
-            layers.push_back(gf_layer);
+//         std::vector<ggml_cgraph *> layers;
+//         for(auto id:layer_ids){
+//             auto * res_layer = gf_res_prev_layers[id].get();
+//             res_layer->reset();
+//             ggml_backend_sched_reset(sched.get());
+//             ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+//             const auto gparams_layer = graph_params(res_layer, ubatch, mctx_layer, gtype);
+//             auto gf_layer = model.build_graph_layer(gparams_layer,id);
+//             layers.push_back(gf_layer);
             
-            if (!ggml_backend_sched_alloc_graph(sched.get(), gf_layer)) {
-                LLAMA_LOG_ERROR("%s: failed to allocate layer %d\n", __func__, id);
-                ret = GGML_STATUS_ALLOC_FAILED;
-                return nullptr;
-            }
-        }
-        ggml_backend_sched_set_pipo_layers(sched.get(), layer_ids.data(), layer_ids.size(), layers.data());
+//             if (!ggml_backend_sched_alloc_graph(sched.get(), gf_layer)) {
+//                 LLAMA_LOG_ERROR("%s: failed to allocate layer %d\n", __func__, id);
+//                 ret = GGML_STATUS_ALLOC_FAILED;
+//                 return nullptr;
+//             }
+//         }
+        // ggml_backend_sched_set_pipo_layers(sched.get(), layer_ids.data(), layer_ids.size(), layers.data());
         
 
-        res->reset();
-        ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
-        gf = model.build_graph(gparams);
-        if (!gf) {
-            LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
-            ret = GGML_STATUS_FAILED;
-            return nullptr;
-        }
+//         res->reset();
+//         ggml_backend_sched_reset(sched.get());
+//         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+//         gf = model.build_graph(gparams);
+//         if (!gf) {
+//             LLAMA_LOG_ERROR("%s: failed to initialize graph\n", __func__);
+//             ret = GGML_STATUS_FAILED;
+//             return nullptr;
+//         }
 
-        if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
-            LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
-            ret = GGML_STATUS_ALLOC_FAILED;
-            return nullptr;
-        }
-    }
+//         if (!ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+//             LLAMA_LOG_ERROR("%s: failed to allocate graph\n", __func__);
+//             ret = GGML_STATUS_ALLOC_FAILED;
+//             return nullptr;
+//         }
+//     }
 
-    // set the input data for the input tensors
-    {
-        //const auto t_start_us = ggml_time_us();
+//     // set the input data for the input tensors
+//     {
+//         //const auto t_start_us = ggml_time_us();
 
-        res->set_inputs(&ubatch);
-        for(auto id:layer_ids){
-            auto * res_layer = gf_res_prev_layers[id].get();
-            res_layer->set_inputs(&ubatch);
-        }
+//         res->set_inputs(&ubatch);
+//         for(auto id:layer_ids){
+//             auto * res_layer = gf_res_prev_layers[id].get();
+//             res_layer->set_inputs(&ubatch);
+//         }
 
-        //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
-    }
+//         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
+//     }
 
-    const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
-    if (status != GGML_STATUS_SUCCESS) {
-        LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
-        ret = status;
-        return nullptr;
-    }
+//     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+//     if (status != GGML_STATUS_SUCCESS) {
+//         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
+//         ret = status;
+//         return nullptr;
+//     }
 
-    ret = GGML_STATUS_SUCCESS;
+//     ret = GGML_STATUS_SUCCESS;
 
-    return res;
+//     return res;
 }
 
 int llama_context::encode(const llama_batch & batch_inp) {
@@ -1659,13 +1658,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     memory_update(false);
 
     llama_memory_context_ptr mctx;
-    llama_memory_context_ptr mctx_layer;
 
     while (true) {
         mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
-        if(cparams.enable_pipo){
-            mctx_layer = memory_layer->init_batch(*balloc, cparams.n_ubatch, output_all);
-        }
+
         if (!mctx) {
             return -2;
         }
@@ -1736,12 +1732,13 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
         ggml_status status;
         const llm_graph_result * res;
-        if(cparams.enable_pipo){
-            res = process_ubatch_pipo(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), mctx_layer.get(), status);
-        }
-        else{
-            res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
-        }
+        // if(cparams.enable_pipo){
+        //     res = process_ubatch_pipo(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        // }
+        // else{
+        //     res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
+        // }
+        res = process_ubatch(ubatch, LLM_GRAPH_TYPE_DECODER, mctx.get(), status);
         
 
 
@@ -2291,13 +2288,8 @@ ggml_status llama_context::graph_compute(
         set_n_threads_fn.second(set_n_threads_fn.first, n_threads);
     }
 
-    ggml_status status;
-    if(cparams.enable_pipo){
-        status = ggml_backend_sched_graph_compute_async_pipo(sched.get(), gf);
-    }
-    else {
-        status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
-    }
+    ggml_status status = ggml_backend_sched_graph_compute_async(sched.get(), gf);
+
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: ggml_backend_sched_graph_compute_async failed with error %d\n", __func__, status);
     }
