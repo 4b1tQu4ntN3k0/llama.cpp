@@ -2413,9 +2413,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     const auto & tensor_split = params.tensor_split;
 
     const auto & n_static_gpu_layers = params.n_gpu_layers;
-    const int n_shared_gpu_layers = 2;
     const int n_layer = hparams.n_layer;
-    const int n_cpu_layers = n_layer - n_static_gpu_layers;
 
     const bool use_mmap_buffer = true;
 
@@ -2513,20 +2511,20 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     {
         // note: cast to int64_t since we will use these for the tensor dimensions
         const int64_t n_head        = hparams.n_head();
-        const int64_t n_head_kv     = hparams.n_head_kv();
+        // const int64_t n_head_kv     = hparams.n_head_kv();
         const int64_t n_embd        = hparams.n_embd;
-        const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa();
+        // const int64_t n_embd_k_gqa  = hparams.n_embd_k_gqa();
         const int64_t n_embd_v_gqa  = hparams.n_embd_v_gqa();
         const int64_t n_embd_head_k = hparams.n_embd_head_k;
-        const int64_t n_embd_head_v = hparams.n_embd_head_v;
+        // const int64_t n_embd_head_v = hparams.n_embd_head_v;
         const int64_t n_ff          = hparams.n_ff();
         const int64_t n_embd_gqa    = n_embd_v_gqa;
         const int64_t n_vocab       = vocab.n_tokens();
-        const int64_t n_token_types = vocab.n_token_types();
-        const int64_t n_rot         = hparams.n_rot;
+        // const int64_t n_token_types = vocab.n_token_types();
+        // const int64_t n_rot         = hparams.n_rot;
         const int64_t n_expert      = hparams.n_expert;
-        const int64_t n_expert_used = hparams.n_expert_used;
-        const int64_t n_ctx_train   = hparams.n_ctx_train;
+        // const int64_t n_expert_used = hparams.n_expert_used;
+        // const int64_t n_ctx_train   = hparams.n_ctx_train;
 
         if (n_expert > 0 && hparams.n_expert_used == 0) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
@@ -2672,12 +2670,23 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                     return t;
                 }
             }
-
+            auto get_suffix = [](const std::string & name) -> std::string {
+                auto pos = name.find('.');
+                if (pos != std::string::npos) {
+                    pos = name.find('.', pos + 1);
+                    if (pos != std::string::npos) {
+                        return name.substr(pos + 1);
+                    }
+                }
+                return name;
+            };
             // pipo check new weight type
             if(info.layer == LLM_TENSOR_LAYER_REPEATING){
                 llama_tensor_key tensor_k = {tn.tensor, t_meta->type};
                 if(!weight_map.count(tensor_k)){
-                    weight_map[tensor_k] = ml.create_tensor(ctx_dynamic_layer, tn, ne, flags);
+                    auto new_tensor = ml.create_tensor(ctx_dynamic_layer, tn, ne, flags);
+                    ggml_set_name(new_tensor, get_suffix(tn.str()).c_str());
+                    weight_map[tensor_k] = new_tensor;
                 }
                 name_weight_map[t_meta->name] = weight_map[tensor_k];
             }
@@ -7926,8 +7935,26 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 reuse);
                     } else {
                         GGML_ASSERT(!hparams.is_swa_any());
-
-                        res = new llama_kv_cache(
+                        if(cparams.enable_pipo){
+                            res = new llama_kv_cache(
+                                *this,
+                                params.type_k,
+                                params.type_v,
+                                !cparams.flash_attn,
+                                cparams.offload_kqv,
+                                cparams.kv_unified,
+                                cparams.n_ctx_seq,
+                                cparams.n_seq_max,
+                                1,
+                                hparams.n_swa,
+                                hparams.swa_type,
+                                nullptr,
+                                nullptr,
+                                cparams.n_gpu_layers,
+                                cparams.n_cpu_layers_per_split);
+                        }
+                        else{
+                            res = new llama_kv_cache(
                                 *this,
                                 params.type_k,
                                 params.type_v,
@@ -7941,6 +7968,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 hparams.swa_type,
                                 nullptr,
                                 nullptr);
+                        }
                     }
                 }
             }
@@ -8078,7 +8106,13 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3:
             {
-                llm = std::make_unique<llm_build_qwen3>(*this, params);
+                if(this->params.enable_pipo){
+                    llm = std::make_unique<llm_build_qwen3_pipo>(*this, params);
+                }
+                else{
+                    llm = std::make_unique<llm_build_qwen3>(*this, params);
+                }
+                
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
@@ -8464,6 +8498,7 @@ llama_model_params llama_model_default_params() {
         /*.use_extra_bufts             =*/ true,
         /*.no_host                     =*/ false,
         /*.no_alloc                    =*/ false,
+        /*.enable_pipo                 =*/ false,
     };
 
     return result;
