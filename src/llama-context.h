@@ -120,7 +120,6 @@ struct llama_context {
                 const llama_ubatch & ubatch,
                     llm_graph_type   gtype,
             llama_memory_context_i * mctx,
-        llama_memory_context_i * mctx_layer,
                        ggml_status & ret);
 
     int encode(const llama_batch & batch_inp);
@@ -224,7 +223,7 @@ public:
 
     // returns the result of ggml_backend_sched_graph_compute_async execution
     ggml_status graph_compute(ggml_cgraph * gf, bool batched);
-
+    
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);

@@ -689,6 +689,9 @@ public:
 
     int64_t max_nodes;
 
+    std::vector<std::vector<ggml_tensor *>> src_tensors;
+    std::vector<std::vector<ggml_tensor *>> dst_tensors;
+
 private:
     // keep a copy of the previous graph parameters
     // we will use this to determine whether the graph can be reused by comparing them with the new parameters
@@ -1058,6 +1061,8 @@ struct llm_graph_context {
             ggml_tensor * dense_2,
             ggml_tensor * dense_2_b,
             ggml_tensor * dense_3) const;
+    
+    std::pair<ggml_tensor*, ggml_tensor*> get_kv_tensor(llm_graph_input_attn_kv * inp, int layer_id) const;
 };
 
 // TODO: better name
