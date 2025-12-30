@@ -756,6 +756,9 @@ void llm_graph_result::reset() {
     ctx_compute.reset(ggml_init(params));
 
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
+
+    src_tensors.clear();
+    dst_tensors.clear();
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
@@ -2682,4 +2685,14 @@ int32_t llama_relative_position_bucket(llama_pos x, llama_pos y, uint64_t n_buck
     relative_bucket += (relative_position < max_exact ? relative_position : relative_position_if_large);
 
     return relative_bucket;
+}
+
+std::pair<ggml_tensor*, ggml_tensor*> llm_graph_context::get_kv_tensor(llm_graph_input_attn_kv * inp, int layer_id) const{
+    const auto * mctx_cur = inp->mctx;
+    if(layer_id>=0){
+        return {mctx_cur->get_k_tensor(layer_id), mctx_cur->get_v_tensor(layer_id)};
+    } 
+    else{
+        return {mctx_cur->get_dk_tensor(), mctx_cur->get_dv_tensor()};
+    }
 }

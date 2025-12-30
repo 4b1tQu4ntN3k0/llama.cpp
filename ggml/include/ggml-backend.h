@@ -369,7 +369,8 @@ extern "C" {
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
-    GGML_API void ggml_backend_sched_set_pipo_layers(ggml_backend_sched_t sched, const int * layer_ids, int n_layers, struct ggml_cgraph ** layers);
+    GGML_API void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, struct ggml_tensor ** src, struct ggml_tensor ** dst, int dynamic_layer_id, int n_tensors);
+
 
 #ifdef  __cplusplus
 }
