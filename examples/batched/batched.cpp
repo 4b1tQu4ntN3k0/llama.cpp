@@ -36,6 +36,9 @@ int main(int argc, char ** argv) {
     // total length of the sequences including the prompt
     int n_predict = params.n_predict;
 
+    bool enable_pipo = true;
+    int n_cpu_layers_per_split = 3;
+
     // init LLM
 
     llama_backend_init();
@@ -44,6 +47,8 @@ int main(int argc, char ** argv) {
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
+    model_params.enable_pipo = enable_pipo;
+    model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
@@ -64,6 +69,10 @@ int main(int argc, char ** argv) {
     // initialize the context
 
     llama_context_params ctx_params = common_context_params_to_llama(params);
+    
+    ctx_params.enable_pipo = enable_pipo;
+    ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
+    ctx_params.op_offload = false;
 
     ctx_params.n_ctx   = n_kv_req;
     ctx_params.n_batch = std::max(n_predict, n_parallel);
