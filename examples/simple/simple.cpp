@@ -11,7 +11,7 @@ static void print_usage(int, char ** argv) {
 }
 
 
-void dum_tensor(ggml_tensor* input){
+void dump_tensor(ggml_tensor* input){
     
     FILE * fp = fopen("logs/input_dump.log", "a");
     if (fp) {
@@ -61,7 +61,7 @@ static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data)
         // return true; 
     }
     
-    dum_tensor(t);
+    dump_tensor(t);
     
     return true;
 }
@@ -176,8 +176,8 @@ int main(int argc, char ** argv) {
     ctx_params.enable_pipo = enable_pipo;
     ctx_params.n_cpu_layers_per_split = 3;
 
-    ctx_params.cb_eval = my_eval_callback;
-    ctx_params.cb_eval_user_data = NULL;
+    // ctx_params.cb_eval = my_eval_callback;
+    // ctx_params.cb_eval_user_data = NULL;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
