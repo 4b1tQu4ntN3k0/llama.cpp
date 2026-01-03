@@ -25,6 +25,8 @@ int main(int argc, char ** argv) {
 
     int is_pp_shared   = params.is_pp_shared;
     int is_tg_separate = params.is_tg_separate;
+    bool enable_pipo = true;
+    int n_cpu_layers_per_split = 3;
 
     std::vector<int> n_pp = params.n_pp;
     std::vector<int> n_tg = params.n_tg;
@@ -38,6 +40,8 @@ int main(int argc, char ** argv) {
     // initialize the model
 
     llama_model_params model_params = common_model_params_to_llama(params);
+    model_params.enable_pipo = enable_pipo;
+    model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     llama_model * model = llama_model_load_from_file(params.model.path.c_str(), model_params);
 
@@ -47,10 +51,12 @@ int main(int argc, char ** argv) {
     }
 
     llama_context_params ctx_params = common_context_params_to_llama(params);
+    ctx_params.op_offload = false;
+    ctx_params.enable_pipo = enable_pipo;
+    ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     // ensure enough sequences are available
     ctx_params.n_seq_max = n_pl.empty() ? 1 : *std::max_element(n_pl.begin(), n_pl.end());
-    // ctx_params.op_offload = false;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 

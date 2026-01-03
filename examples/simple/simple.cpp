@@ -130,6 +130,7 @@ int main(int argc, char ** argv) {
         }
     }
     bool enable_pipo = true;
+    int n_cpu_layers_per_split = 3;
 
     // load dynamic backends
 
@@ -140,6 +141,10 @@ int main(int argc, char ** argv) {
     llama_model_params model_params = llama_model_default_params();
     model_params.n_gpu_layers = ngl;
     model_params.enable_pipo = enable_pipo;
+    // model_params.no_host = false;
+    model_params.use_mmap = true;
+    model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
+    // model_params.use_extra_bufts = false;
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 
@@ -174,7 +179,7 @@ int main(int argc, char ** argv) {
     ctx_params.op_offload = false;
 
     ctx_params.enable_pipo = enable_pipo;
-    ctx_params.n_cpu_layers_per_split = 3;
+    ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     // ctx_params.cb_eval = my_eval_callback;
     // ctx_params.cb_eval_user_data = NULL;
@@ -233,6 +238,8 @@ int main(int argc, char ** argv) {
     int n_decode = 0;
     llama_token new_token_id;
 
+    std::vector<std::string> tokens;
+
     for (int n_pos = 0; n_pos + batch.n_tokens < n_prompt + n_predict; ) {
         // evaluate the current batch with the transformer model
         if (llama_decode(ctx, batch)) {
@@ -258,8 +265,9 @@ int main(int argc, char ** argv) {
                 return 1;
             }
             std::string s(buf, n);
-            printf("%s", s.c_str());
-            fflush(stdout);
+            tokens.push_back(s);
+            // printf("%s", s.c_str());
+            // fflush(stdout);
 
             // prepare the next batch with the sampled token
             batch = llama_batch_get_one(&new_token_id, 1);
@@ -268,6 +276,10 @@ int main(int argc, char ** argv) {
         }
     }
 
+    for(auto &s: tokens){
+        printf("%s", s.c_str());
+        fflush(stdout);
+    }
     printf("\n");
 
     const auto t_main_end = ggml_time_us();
