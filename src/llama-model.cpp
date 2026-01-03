@@ -664,6 +664,7 @@ struct llama_model::impl {
     std::vector<std::pair<ggml_context_ptr, std::vector<ggml_backend_buffer_ptr>>> ctxs_bufs;
 
     buft_list_t cpu_buft_list;
+    buft_list_t cpu_host_buft_list;
     std::map<ggml_backend_dev_t, buft_list_t> gpu_buft_list;
 
     struct layer_dev {
@@ -2999,7 +3000,8 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
 
     // build a list of buffer types for the CPU and GPU devices
-    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
+    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, true);
+    pimpl->cpu_host_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, false);
     for (auto * dev : devices) {
         buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
         // add CPU buffer types as a fallback
@@ -3014,12 +3016,20 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
         const bool is_swa = il < (int) hparams.n_layer && hparams.is_swa(il);
         if (il >= n_static_gpu_layers) {
-            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
-            return {cpu_dev, &pimpl->cpu_buft_list};
+            if((il - n_static_gpu_layers + 1) % (params.n_cpu_layers_per_split + 1) == 0){
+                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device CUDA_HOST, is_swa = %d\n", il, is_swa);
+                return {cpu_dev, &pimpl->cpu_host_buft_list};
+            }
+            else{
+                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
+                return {cpu_dev, &pimpl->cpu_buft_list};
+            }     
         }
-        auto * dev = devices.at(0);
-        LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
-        return {dev, &pimpl->gpu_buft_list.at(dev)};
+        else{
+            auto * dev = devices.at(0);
+            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
+            return {dev, &pimpl->gpu_buft_list.at(dev)};
+        }
     };
 
     // assign the input layer
@@ -3034,6 +3044,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 
     // assign the output layer
     pimpl->dev_output = { cpu_dev, &pimpl->cpu_buft_list };
+    // pimpl->dev_output = { cpu_dev, &pimpl->gpu_buft_list.at(devices.at(0)) };
 
     // one ggml context per buffer type
     int max_n_tensors = ml.n_tensors;
@@ -3223,13 +3234,13 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 
             // avoid using a host buffer when using mmap
             auto * buft_dev = ggml_backend_buft_get_device(buft);
-            if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
-                auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-                if (!cpu_dev) {
-                    throw std::runtime_error("no CPU backend found");
-                }
-                buft = ggml_backend_dev_buffer_type(cpu_dev);
-            }
+            // if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
+            //     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+            //     if (!cpu_dev) {
+            //         throw std::runtime_error("no CPU backend found");
+            //     }
+            //     buft = ggml_backend_dev_buffer_type(cpu_dev);
+            // }
 
             if (buft != buft_list->front().second) {
                 n_moved_tensors++;
@@ -9655,6 +9666,7 @@ llama_model_params llama_model_default_params() {
         /*.tensor_buft_overrides       =*/ nullptr,
         /*.n_gpu_layers                =*/ -1,
         /*.split_mode                  =*/ LLAMA_SPLIT_MODE_LAYER,
+        /*.n_cpu_layers_per_split      =*/ 3,
         /*.main_gpu                    =*/ 0,
         /*.tensor_split                =*/ nullptr,
         /*.progress_callback           =*/ nullptr,
