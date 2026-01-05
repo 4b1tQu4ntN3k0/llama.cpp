@@ -552,6 +552,28 @@ void ggml_cuda_cpy(ggml_backend_cuda_context & ctx, const ggml_tensor * src0, gg
     }
 }
 
+// SM Copy Kernel for PIPO
+static __global__ void cpy_sm_kernel_f32(const float * cx, float * cdst, const int n) {
+    const int i = blockDim.x * blockIdx.x + threadIdx.x;
+    if (i >= n) return;
+    cdst[i] = cx[i];
+}
+
+void ggml_cuda_cpy_sm(cudaStream_t stream, const char * cx, char * cdst, const size_t len) {
+    int n_f32 = len / sizeof(float);
+    if (n_f32 > 0) {
+        const int block_size = 256;
+        const int num_blocks = (n_f32 + block_size - 1) / block_size;
+        cpy_sm_kernel_f32<<<num_blocks, block_size, 0, stream>>>((const float *)cx, (float *)cdst, n_f32);
+    }
+    
+    int rem = len % sizeof(float);
+    if (rem > 0) {
+        size_t offset = n_f32 * sizeof(float);
+        cudaMemcpyAsync(cdst + offset, cx + offset, rem, cudaMemcpyDefault, stream);
+    }
+}
+
 void ggml_cuda_dup(ggml_backend_cuda_context & ctx, ggml_tensor * dst) {
     const ggml_tensor * src0 = dst->src[0];
     ggml_cuda_cpy(ctx, src0, dst);
