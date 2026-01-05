@@ -12,6 +12,7 @@
 #include "ggml-backend-impl.h"
 #include "ggml-alloc.h"
 #include "ggml-impl.h"
+#include "ggml-cuda.h"
 
 #include <assert.h>
 #include <limits.h>
@@ -1099,6 +1100,9 @@ void pipo_split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
 }
 
 void pipo_set_norm(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
+    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
+    int n_static_layers = sched->n_static_layers;
+
     int gpu_backend = -1;
     int cpu_backend = -1;
     for (int i = 0; i < sched->n_backends; i++) {
@@ -1112,17 +1116,15 @@ void pipo_set_norm(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
     
     for (int i = 0; i < graph->n_nodes; i++) {
         struct ggml_tensor * node = graph->nodes[i];
-        int * leaf_backend_id = &tensor_backend_id(node);
-        
-        if(pipo_need_offload(sched, node)) {
-            // move to gpu
-            if(strstr(node->name, "norm") != NULL) {
-                *leaf_backend_id = gpu_backend;
+        int * node_backend_id = &tensor_backend_id(node);
+        int layer_id = pipo_extract_layer_id(node->name);
+        if(layer_id != -1 && (strstr(node->name, "norm") != NULL || strstr(node->name, "l_out") != NULL)){
+            if(layer_id < n_static_layers || (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0){
+                *node_backend_id = gpu_backend;
             }
-        }
-        else if(strstr(node->name, "l_out") != NULL && pipo_need_set_layer_out_backend(sched, node)){
-            // fix CPU l_out
-            *leaf_backend_id = cpu_backend;
+            else{
+                *node_backend_id = cpu_backend;
+            }
         }
     }
 }
@@ -1637,15 +1639,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         for (int i = 0; i < sched->n_splits; i++) {
             struct ggml_backend_sched_split * split = &sched->splits[i];
             int backend_id = split->backend_id;
+            split->is_dynamic_layer=false;
             if(backend_id==0){
                 gpu_cnt++;
                 if(gpu_cnt>1){
                     split->is_dynamic_layer=true;
                 }
-            }
-            for(int j=0;j<split->graph.n_leafs;j++){
-                auto leaf = split->graph.leafs[j];
-                
             }
         }
     }
@@ -1816,15 +1815,29 @@ static enum ggml_status copy_split_input(ggml_backend_sched_t sched, struct ggml
             } else {
                 // try async copy, but if not possible, we can still use a sync copy without synchronizing the dst backend, since we handle the synchronization here with multiple copies and events
                 // TODO: add public function to facilitate this, since applications do not have direct access to the backend interface
-                if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
-                    ggml_backend_synchronize(input_backend);
-                    if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
-                        ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
-                    } else {
-                        ggml_backend_synchronize(split_backend);
-                    }
-                    ggml_backend_tensor_copy(input, input_cpy);
+                
+                // PIPO: Use SM Copy for Input Tensors to avoid blocking DMA
+                bool dst_is_cuda = ggml_backend_is_cuda(split_backend);
+                bool src_is_cuda = ggml_backend_is_cuda(input_backend);
+                bool src_is_host = ggml_backend_buffer_is_host(input->buffer);
+                bool dst_is_host = ggml_backend_buffer_is_host(input_cpy->buffer);
+
+                if (dst_is_cuda && src_is_host) {
+                    ggml_cuda_copy_input_async_sm(split_backend, input->data, input_cpy->data, ggml_nbytes(input));
+                } else if (src_is_cuda && dst_is_host) {
+                    ggml_cuda_copy_input_async_sm(input_backend, input->data, input_cpy->data, ggml_nbytes(input));
+                } else {
+                    assert(false);
                 }
+                // if (!split_backend->iface.cpy_tensor_async || !split_backend->iface.cpy_tensor_async(input_backend, split_backend, input, input_cpy)) {
+                //     ggml_backend_synchronize(input_backend);
+                //     if (sched->events[split_backend_id][sched->cur_copy] != NULL) {
+                //         ggml_backend_event_synchronize(sched->events[split_backend_id][sched->cur_copy]);
+                //     } else {
+                //         ggml_backend_synchronize(split_backend);
+                //     }
+                //     ggml_backend_tensor_copy(input, input_cpy);
+                // }
             }
         }
     }
@@ -1880,6 +1893,7 @@ ggml_status pipo_send_data_async(ggml_backend_sched_t sched, int id, ggml_backen
         if(sched->src_tensors[id][i]==nullptr){
             break;
         }
+        // printf("%d send cache src: %p dst: %p\n", id, sched->src_tensors[id][i]->data, sched->dst_tensors[id][i]->data);
         ggml_backend_tensor_set_async(backend, sched->dst_tensors[id][i], sched->src_tensors[id][i]->data,
                                         0, ggml_nbytes(sched->src_tensors[id][i]));
         // ggml_backend_tensor_copy(sched->src_tensors[id][i], sched->dst_tensors[id][i]);
@@ -1895,6 +1909,7 @@ ggml_status pipo_save_data_async(ggml_backend_sched_t sched, int id, ggml_backen
         if(strstr(sched->src_tensors[id][i]->name, "cache")!=NULL){
             // ggml_backend_tensor_set_async(backend, sched->src_tensors[id][i], sched->dst_tensors[id][i]->data,
             //                             0, ggml_nbytes(sched->dst_tensors[id][i]));
+            // printf("%d save cache src: %p dst: %p\n", id, sched->src_tensors[id][i]->data, sched->dst_tensors[id][i]->data);
             ggml_backend_tensor_copy(sched->dst_tensors[id][i], sched->src_tensors[id][i]);
         }
     }
@@ -2034,14 +2049,15 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
+        // ggml_backend_sched_print_assignments(sched, &split->graph);
 
-        // if(split->is_dynamic_layer){
-        //     t_send_data_start = ggml_time_us();
-        //     ggml_backend_synchronize(split_backend);
-        //     t_send_data_end = ggml_time_us();
-        //     duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
-        //     printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id, duration_ms);
-        // }
+        if(split->is_dynamic_layer){
+            t_send_data_start = ggml_time_us();
+            ggml_backend_synchronize(split_backend);
+            t_send_data_end = ggml_time_us();
+            duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
+            printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id, duration_ms);
+        }
 
         t_copy_input_start = ggml_time_us();
         // copy input tensors for current layer (usually sync)
@@ -2051,6 +2067,7 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
                 return ret;
             }
         }
+        // ggml_backend_synchronize(split_backend);
         t_copy_input_end = ggml_time_us();
         duration_ms = (t_copy_input_end - t_copy_input_start) / 1000.0;
         printf("\n\t%d split copy input tensors: %.3f ms\n", split_id, duration_ms);
@@ -2064,12 +2081,12 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
             if(ret != GGML_STATUS_SUCCESS){
                 return ret;
             }
-            ggml_backend_synchronize(sched->backends[splits[split_id + 1].backend_id]);
+            // ggml_backend_synchronize(sched->backends[splits[split_id + 1].backend_id]);
         }
         t_send_data_end = ggml_time_us();
         duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
         printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id + 1, duration_ms);
-        
+
         t_compute_start = ggml_time_us();
         // compute current layer, CPU layer (sync), GPU layer (async)
         if (!sched->callback_eval) {
@@ -2116,8 +2133,7 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
         }
         t_compute_end = ggml_time_us();
         duration_ms = (t_compute_end - t_compute_start) / 1000.0;
-        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
-        
+        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);        
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -2285,7 +2301,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         t_end = ggml_time_us();
         duration_ms = (t_end - t_start) / 1000.0;
         // printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
-        t_start = ggml_time_us();
+        // t_start = ggml_time_us();
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
@@ -2293,6 +2309,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         } else {
             // similar to ggml_backend_compare_graph_backend
+            int cnt=0;
             for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
                 struct ggml_tensor * t = split->graph.nodes[j0];
 
@@ -2309,6 +2326,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
 
+                t_start = ggml_time_us();
+
                 enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
                 if (ec != GGML_STATUS_SUCCESS) {
                     return ec;
@@ -2322,12 +2341,16 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 j0 = j1;
+
+                t_end = ggml_time_us();
+                duration_ms = (t_end - t_start) / 1000.0;
+                if(split_backend_id) printf("\n\t%d split %d layer compute: %.3f ms\n", split_id, cnt++, duration_ms);
             }
         }
-        ggml_backend_synchronize(split_backend);
-        t_end = ggml_time_us();
-        duration_ms = (t_end - t_start) / 1000.0;
-        if(split_backend_id) printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
+        // ggml_backend_synchronize(split_backend);
+        // t_end = ggml_time_us();
+        // duration_ms = (t_end - t_start) / 1000.0;
+        // if(split_backend_id) printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
 
         // record the event of this copy
         if (split->n_inputs > 0) {

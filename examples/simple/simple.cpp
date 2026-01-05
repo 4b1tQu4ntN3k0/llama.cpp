@@ -6,12 +6,13 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [prompt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-pipo] [prompt]\n", argv[0]);
     printf("\n");
 }
 
 
 void dump_tensor(ggml_tensor* input){
+    // return;
     
     FILE * fp = fopen("logs/input_dump.log", "a");
     if (fp) {
@@ -57,7 +58,7 @@ static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data)
     if (ask) {
         // Return true to observe this tensor
         // You can filter by name here, e.g.:
-        return strstr(t->name, "cache")!=NULL;
+        return strstr(t->name, "weight")!=NULL;
         // return true; 
     }
     
@@ -70,11 +71,12 @@ int main(int argc, char ** argv) {
     // path to the model gguf file
     std::string model_path;
     // prompt to generate text from
-    std::string prompt = "Hello my name is";
+    std::string prompt = "Once upon a time, in a land far, far away, there was a small village nestled between two great mountains. The villagers were known for their kindness and their peculiar habit of singing to the stars every night. One day, a mysterious traveler arrived at the village gates, carrying nothing but a worn-out leather bag and a wooden staff. The traveler claimed to have come from the other side of the world, seeking a legendary artifact said to be hidden deep within the caves of the northern mountain.";
     // number of layers to offload to the GPU
     int ngl = 99;
     // number of tokens to predict
     int n_predict = 32;
+    bool enable_pipo = false;
 
     // parse command line arguments
 
@@ -112,6 +114,8 @@ int main(int argc, char ** argv) {
                     print_usage(argc, argv);
                     return 1;
                 }
+            } else if (strcmp(argv[i], "-pipo") == 0) {
+                enable_pipo = true;
             } else {
                 // prompt starts here
                 break;
@@ -129,7 +133,6 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    bool enable_pipo = true;
     int n_cpu_layers_per_split = 3;
 
     // load dynamic backends
@@ -181,8 +184,8 @@ int main(int argc, char ** argv) {
     ctx_params.enable_pipo = enable_pipo;
     ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
-    // ctx_params.cb_eval = my_eval_callback;
-    // ctx_params.cb_eval_user_data = NULL;
+    ctx_params.cb_eval = my_eval_callback;
+    ctx_params.cb_eval_user_data = NULL;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
@@ -275,12 +278,13 @@ int main(int argc, char ** argv) {
             n_decode += 1;
         }
     }
-
+    printf("\n");
     for(auto &s: tokens){
         printf("%s", s.c_str());
         fflush(stdout);
     }
     printf("\n");
+    fflush(stdout);
 
     const auto t_main_end = ggml_time_us();
 

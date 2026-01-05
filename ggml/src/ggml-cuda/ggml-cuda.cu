@@ -4070,7 +4070,7 @@ bool ggml_backend_cuda_register_host_buffer(void * buffer, size_t size) {
     }
 
 #if CUDART_VERSION >= 11010 || defined(GGML_USE_MUSA) || defined(GGML_USE_HIP)
-    cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly);
+    cudaError_t err = cudaHostRegister(buffer, size, cudaHostRegisterPortable | cudaHostRegisterReadOnly | cudaHostRegisterMapped);
     if (err != cudaSuccess) {
         // clear the error
         (void)cudaGetLastError();
@@ -4813,6 +4813,54 @@ static void * ggml_backend_cuda_reg_get_proc_address(ggml_backend_reg_t reg, con
         return (void *)ggml_backend_cuda_get_features;
     }
     return nullptr;
+}
+
+void ggml_cuda_copy_input_async_sm(ggml_backend_t backend, void * src, void * dst, size_t size) {
+    ggml_backend_cuda_context * ctx = (ggml_backend_cuda_context *)backend->context;
+    cudaStream_t stream = ctx->stream();
+
+    void * dev_src = src;
+    void * dev_dst = dst;
+    cudaError_t err;
+
+    // Handle Source
+    cudaPointerAttributes src_attrs;
+    err = cudaPointerGetAttributes(&src_attrs, src);
+    if (err == cudaSuccess && src_attrs.type == cudaMemoryTypeHost) {
+        // Host memory, try to register and get device pointer
+        // err = cudaHostRegister(src, size, cudaHostRegisterMapped);
+        // if (err != cudaSuccess && err != cudaErrorHostMemoryAlreadyRegistered) {
+        //      // Fallback
+        //      cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+        //      return;
+        // }
+        err = cudaHostGetDevicePointer(&dev_src, src, 0);
+        if (err != cudaSuccess) {
+             cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+             return;
+        }
+    }
+
+    // Handle Destination
+    cudaPointerAttributes dst_attrs;
+    err = cudaPointerGetAttributes(&dst_attrs, dst);
+    if (err == cudaSuccess && dst_attrs.type == cudaMemoryTypeHost) {
+        // Host memory, try to register and get device pointer
+        // err = cudaHostRegister(dst, size, cudaHostRegisterMapped);
+        // if (err != cudaSuccess && err != cudaErrorHostMemoryAlreadyRegistered) {
+        //      // Fallback
+        //      cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+        //      return;
+        // }
+        err = cudaHostGetDevicePointer(&dev_dst, dst, 0);
+        if (err != cudaSuccess) {
+             cudaMemcpyAsync(dst, src, size, cudaMemcpyDefault, stream);
+             return;
+        }
+    }
+
+    // Launch Kernel
+    ggml_cuda_cpy_sm(stream, (const char *)dev_src, (char *)dev_dst, size);
 }
 
 static const ggml_backend_reg_i ggml_backend_cuda_reg_interface = {
