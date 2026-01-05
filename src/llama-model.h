@@ -543,6 +543,7 @@ struct llama_model {
     size_t n_devices() const;
 
     uint32_t n_gpu_layers() const;
+    uint32_t n_cpu_layers_per_split() const;
     llama_split_mode split_mode() const;
 
     std::map<ggml_backend_buffer_type_t, size_t> memory_breakdown() const;

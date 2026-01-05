@@ -2705,7 +2705,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
 
     // build a list of buffer types for the CPU and GPU devices
-    pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, true);
+    pimpl->cpu_buft_list = make_cpu_buft_list(devices, false, true);
     pimpl->cpu_host_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, false);
     for (auto * dev : devices) {
         buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
@@ -8388,6 +8388,10 @@ size_t llama_model::n_devices() const {
 
 uint32_t llama_model::n_gpu_layers() const {
     return params.n_gpu_layers >= 0 ? params.n_gpu_layers : hparams.n_layer + 1;
+}
+
+uint32_t llama_model::n_cpu_layers_per_split()const {
+    return params.n_cpu_layers_per_split;
 }
 
 llama_split_mode llama_model::split_mode() const {
