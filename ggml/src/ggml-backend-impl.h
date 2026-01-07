@@ -59,6 +59,9 @@ extern "C" {
         void         (*clear)        (ggml_backend_buffer_t buffer, uint8_t value);
         // (optional) reset any internal state due to tensor initialization, such as tensor extras
         void         (*reset)        (ggml_backend_buffer_t buffer);
+        // pipo method set_async
+        void         (*set_tensor_async)   (ggml_backend_buffer_t buffer,       struct ggml_tensor * tensor, const void * data, size_t offset, size_t size);
+        void         (*synchronize)   (ggml_backend_buffer_t buffer);
     };
 
     struct ggml_backend_buffer {
