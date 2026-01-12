@@ -2049,7 +2049,7 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
         ggml_backend_t split_backend = sched->backends[split_backend_id];
         // ggml_backend_sched_print_assignments(sched, &split->graph);
 
-        t_copy_input_start = ggml_time_us();
+        // t_copy_input_start = ggml_time_us();
         // copy input tensors for current layer (usually sync)
         {
             ret = copy_split_input(sched, split, prev_ids_tensor, ids, used_ids);
@@ -2058,11 +2058,11 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
             }
         }
         // ggml_backend_synchronize(split_backend);
-        t_copy_input_end = ggml_time_us();
-        duration_ms = (t_copy_input_end - t_copy_input_start) / 1000.0;
-        printf("\n\t%d split copy input tensors: %.3f ms\n", split_id, duration_ms);
+        // t_copy_input_end = ggml_time_us();
+        // duration_ms = (t_copy_input_end - t_copy_input_start) / 1000.0;
+        // printf("\n\t%d split copy input tensors: %.3f ms\n", split_id, duration_ms);
 
-        t_send_data_start = ggml_time_us();
+        // t_send_data_start = ggml_time_us();
         // async copy weight & cache for next layer (GPU dynamic layer)
         if(split_id + 1 < sched->n_splits && splits[split_id + 1].is_dynamic_layer) {
             dynamic_layer_id++;
@@ -2073,20 +2073,20 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
             }
             // ggml_backend_synchronize(sched->backends[splits[split_id + 1].backend_id]);
         }
-        t_send_data_end = ggml_time_us();
-        duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
-        printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id + 1, duration_ms);
+        // t_send_data_end = ggml_time_us();
+        // duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
+        // printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id + 1, duration_ms);
         
         if(split->is_dynamic_layer){
-            t_send_data_start = ggml_time_us();
+            // t_send_data_start = ggml_time_us();
             // ggml_backend_synchronize(split_backend);
             pipo_send_data_async_synchronize(sched, dynamic_layer_id, split_backend);
-            t_send_data_end = ggml_time_us();
-            duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
-            printf("\n\t%d split copy weight & cache synchronize: %.3f ms\n", split_id, duration_ms);
+            // t_send_data_end = ggml_time_us();
+            // duration_ms = (t_send_data_end - t_send_data_start) / 1000.0;
+            // printf("\n\t%d split copy weight & cache synchronize: %.3f ms\n", split_id, duration_ms);
         }
 
-        t_compute_start = ggml_time_us();
+        // t_compute_start = ggml_time_us();
         // compute current layer, CPU layer (sync), GPU layer (async)
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute(split_backend, &split->graph);
@@ -2126,9 +2126,9 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
                 j0 = j1;
             }
         }
-        t_compute_end = ggml_time_us();
-        duration_ms = (t_compute_end - t_compute_start) / 1000.0;
-        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);        
+        // t_compute_end = ggml_time_us();
+        // duration_ms = (t_compute_end - t_compute_start) / 1000.0;
+        // printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);        
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -2137,7 +2137,7 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
             }
         }
 
-        t_save_start = ggml_time_us();
+        // t_save_start = ggml_time_us();
         if(split->is_dynamic_layer){
             // ggml_backend_synchronize(split_backend);
             ret = pipo_save_data(sched, dynamic_layer_id, split_backend);
@@ -2145,9 +2145,9 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
                 return ret;
             }
         }
-        t_save_end = ggml_time_us();
-        duration_ms = (t_save_end - t_save_start) / 1000.0;
-        printf("\n\t%d split save cache: %.3f ms\n", split_id, duration_ms);
+        // t_save_end = ggml_time_us();
+        // duration_ms = (t_save_end - t_save_start) / 1000.0;
+        // printf("\n\t%d split save cache: %.3f ms\n", split_id, duration_ms);
     }
     return ret;
 }
