@@ -338,6 +338,8 @@ struct cmd_params {
     std::vector<bool>                embeddings;
     std::vector<bool>                no_op_offload;
     std::vector<bool>                no_host;
+    std::vector<bool>                enable_pipo;
+    std::vector<int>                 n_cpu_layers_per_split;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -377,6 +379,8 @@ static const cmd_params cmd_params_defaults = {
     /* embeddings           */ { false },
     /* no_op_offload        */ { false },
     /* no_host              */ { false },
+    /* enable_pipo          */ { false },
+    /* n_cpu_layers_per_split*/{ 3 },
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -461,6 +465,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -nopo, --no-op-offload <0|1>              (default: 0)\n");
     printf("  --no-host <0|1>                           (default: %s)\n",
            join(cmd_params_defaults.no_host, ",").c_str());
+    printf("  --pipo <0|1>                              (default: %s)\n",
+           join(cmd_params_defaults.enable_pipo, ",").c_str());
+    printf("  --n-cpu-layers-per-split <n>              (default: %s)\n",
+           join(cmd_params_defaults.n_cpu_layers_per_split, ",").c_str());
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -804,6 +812,20 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.no_host.insert(params.no_host.end(), p.begin(), p.end());
+            } else if (arg == "--pipo") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = string_split<bool>(argv[i], split_delim);
+                params.enable_pipo.insert(params.enable_pipo.end(), p.begin(), p.end());
+            } else if (arg == "--n-cpu-layers-per-split") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                auto p = parse_int_range(argv[i]);
+                params.n_cpu_layers_per_split.insert(params.n_cpu_layers_per_split.end(), p.begin(), p.end());
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1031,6 +1053,12 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     if (params.no_host.empty()) {
         params.no_host = cmd_params_defaults.no_host;
     }
+    if (params.enable_pipo.empty()) {
+        params.enable_pipo = cmd_params_defaults.enable_pipo;
+    }
+    if (params.n_cpu_layers_per_split.empty()) {
+        params.n_cpu_layers_per_split = cmd_params_defaults.n_cpu_layers_per_split;
+    }
     if (params.n_threads.empty()) {
         params.n_threads = cmd_params_defaults.n_threads;
     }
@@ -1074,6 +1102,8 @@ struct cmd_params_instance {
     bool               embeddings;
     bool               no_op_offload;
     bool               no_host;
+    bool               enable_pipo;
+    int                n_cpu_layers_per_split;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1088,6 +1118,8 @@ struct cmd_params_instance {
         mparams.use_mmap      = use_mmap;
         mparams.use_direct_io = use_direct_io;
         mparams.no_host       = no_host;
+        mparams.enable_pipo  = enable_pipo;
+        mparams.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
         if (n_cpu_moe <= 0) {
             if (tensor_buft_overrides.empty()) {
@@ -1135,6 +1167,8 @@ struct cmd_params_instance {
                use_mmap == other.use_mmap && use_direct_io == other.use_direct_io &&
                devices == other.devices &&
                no_host == other.no_host &&
+               enable_pipo == other.enable_pipo &&
+               n_cpu_layers_per_split == other.n_cpu_layers_per_split &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1151,6 +1185,11 @@ struct cmd_params_instance {
         cparams.embeddings      = embeddings;
         cparams.op_offload      = !no_op_offload;
         cparams.swa_full        = false;
+        cparams.enable_pipo     = enable_pipo;
+        cparams.n_cpu_layers_per_split = n_cpu_layers_per_split;
+        if(enable_pipo){
+            cparams.op_offload = false;
+        }
 
         return cparams;
     }
@@ -1172,6 +1211,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
     for (const auto & mmp : params.use_mmap)
     for (const auto & dio : params.use_direct_io)
     for (const auto & noh : params.no_host)
+    for (const auto & pipo : params.enable_pipo)
+    for (const auto & nclps : params.n_cpu_layers_per_split)
     for (const auto & embd : params.embeddings)
     for (const auto & nopo : params.no_op_offload)
     for (const auto & nb : params.n_batch)
@@ -1216,6 +1257,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .enable_pipo  = */ pipo,
+                /* .n_cpu_layers_per_split = */ nclps,
             };
             instances.push_back(instance);
         }
@@ -1251,6 +1294,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .enable_pipo  = */ pipo,
+                /* .n_cpu_layers_per_split = */ nclps,
             };
             instances.push_back(instance);
         }
@@ -1286,6 +1331,8 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .embeddings   = */ embd,
                 /* .no_op_offload= */ nopo,
                 /* .no_host      = */ noh,
+                /* .enable_pipo  = */ pipo,
+                /* .n_cpu_layers_per_split = */ nclps,
             };
             instances.push_back(instance);
         }
@@ -1326,6 +1373,8 @@ struct test {
     bool                     embeddings;
     bool                     no_op_offload;
     bool                     no_host;
+    bool                     enable_pipo;
+    int                      n_cpu_layers_per_split;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -1364,6 +1413,8 @@ struct test {
         embeddings     = inst.embeddings;
         no_op_offload  = inst.no_op_offload;
         no_host        = inst.no_host;
+        enable_pipo    = inst.enable_pipo;
+        n_cpu_layers_per_split = inst.n_cpu_layers_per_split;
         n_prompt       = inst.n_prompt;
         n_gen          = inst.n_gen;
         n_depth        = inst.n_depth;
@@ -1421,7 +1472,8 @@ struct test {
             "type_k",         "type_v",         "n_gpu_layers",  "n_cpu_moe",      "split_mode",
             "main_gpu",       "no_kv_offload",  "flash_attn",    "devices",        "tensor_split",
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
-            "no_op_offload",  "no_host",        "n_prompt",      "n_gen",          "n_depth",
+            "no_op_offload",  "no_host",        "enable_pipo","n_cpu_layers_per_split",
+            "n_prompt",      "n_gen",          "n_depth",
             "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
         };
         return fields;
@@ -1433,11 +1485,11 @@ struct test {
         if (field == "build_number" || field == "n_batch" || field == "n_ubatch" || field == "n_threads" ||
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
-            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe") {
+            field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" || field == "n_cpu_layers_per_split") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" || field == "flash_attn" ||
-            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" || field == "no_host") {
+            field == "use_mmap" || field == "use_direct_io" || field == "embeddings" || field == "no_host" || field == "enable_pipo") {
             return BOOL;
         }
         if (field == "avg_ts" || field == "stddev_ts") {
@@ -1514,6 +1566,8 @@ struct test {
                                             std::to_string(embeddings),
                                             std::to_string(no_op_offload),
                                             std::to_string(no_host),
+                                            std::to_string(enable_pipo),
+                                            std::to_string(n_cpu_layers_per_split),
                                             std::to_string(n_prompt),
                                             std::to_string(n_gen),
                                             std::to_string(n_depth),
@@ -1708,6 +1762,12 @@ struct markdown_printer : public printer {
         if (field == "no_host") {
             return 4;
         }
+        if (field == "enable_pipo") {
+            return 4;
+        }
+        if (field == "n_cpu_layers_per_split") {
+            return 3;
+        }
 
         int width = std::max((int) field.length(), 10);
 
@@ -1747,6 +1807,12 @@ struct markdown_printer : public printer {
         }
         if (field == "no_host") {
             return "noh";
+        }
+        if (field == "enable_pipo") {
+            return "pipo";
+        }
+        if (field == "n_cpu_layers_per_split") {
+            return "cps";
         }
         if (field == "devices") {
             return "dev";
@@ -1834,6 +1900,12 @@ struct markdown_printer : public printer {
         }
         if (params.no_host.size() > 1 || params.no_host != cmd_params_defaults.no_host) {
             fields.emplace_back("no_host");
+        }
+        if (params.enable_pipo.size() > 1 || params.enable_pipo != cmd_params_defaults.enable_pipo) {
+            fields.emplace_back("enable_pipo");
+        }
+        if (params.n_cpu_layers_per_split.size() > 1 || params.n_cpu_layers_per_split != cmd_params_defaults.n_cpu_layers_per_split) {
+            fields.emplace_back("n_cpu_layers_per_split");
         }
         fields.emplace_back("test");
         fields.emplace_back("t/s");
