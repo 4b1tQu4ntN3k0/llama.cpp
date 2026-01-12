@@ -34,7 +34,7 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
     ggml_tensor * ffn_down;
 
     for (int il = 0; il < n_layer; ++il) {
-        bool is_dynamic_layer = il>n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0;
+        bool is_dynamic_layer = il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0;
         if(is_dynamic_layer){
             const llama_layer& layer = model.layers[il];
             attn_norm = model.name_weight_map.at(std::string(layer.attn_norm->name));
