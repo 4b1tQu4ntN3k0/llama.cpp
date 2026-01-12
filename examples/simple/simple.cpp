@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    int n_cpu_layers_per_split = 3;
+    int n_cpu_layers_per_split = 0;
 
     // load dynamic backends
 
@@ -179,7 +179,7 @@ int main(int argc, char ** argv) {
     // enable performance counters
     ctx_params.no_perf = false;
 
-    ctx_params.op_offload = false;
+    if(enable_pipo) ctx_params.op_offload = false;
 
     ctx_params.enable_pipo = enable_pipo;
     ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;

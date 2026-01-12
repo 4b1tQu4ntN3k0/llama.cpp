@@ -1990,7 +1990,8 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
             // printf("\n\t%d split copy weight & cache synchronize: %.3f ms\n", split_id, duration_ms);
         }
 
-        // t_compute_start = ggml_time_us();
+        ggml_backend_synchronize(split_backend);
+        t_compute_start = ggml_time_us();
         // compute current layer, CPU layer (sync), GPU layer (async)
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute(split_backend, &split->graph);
@@ -2030,9 +2031,10 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
                 j0 = j1;
             }
         }
-        // t_compute_end = ggml_time_us();
-        // duration_ms = (t_compute_end - t_compute_start) / 1000.0;
-        // printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);        
+        ggml_backend_synchronize(split_backend);
+        t_compute_end = ggml_time_us();
+        duration_ms = (t_compute_end - t_compute_start) / 1000.0;
+        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);        
 
         // record the event of this copy
         if (split->n_inputs > 0) {
@@ -2196,11 +2198,12 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-
+        ggml_backend_synchronize(split_backend);
         t_end = ggml_time_us();
         duration_ms = (t_end - t_start) / 1000.0;
-        // printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
-        // t_start = ggml_time_us();
+        printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
+
+        t_start = ggml_time_us();
         if (!sched->callback_eval) {
             enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &split->graph);
             if (ec != GGML_STATUS_SUCCESS) {
@@ -2243,13 +2246,13 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 t_end = ggml_time_us();
                 duration_ms = (t_end - t_start) / 1000.0;
-                if(split_backend_id) printf("\n\t%d split %d layer compute: %.3f ms\n", split_id, cnt++, duration_ms);
+                printf("\n\t%d split %d layer compute: %.3f ms\n", split_id, cnt++, duration_ms);
             }
         }
-        // ggml_backend_synchronize(split_backend);
-        // t_end = ggml_time_us();
-        // duration_ms = (t_end - t_start) / 1000.0;
-        // if(split_backend_id) printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
+        ggml_backend_synchronize(split_backend);
+        t_end = ggml_time_us();
+        duration_ms = (t_end - t_start) / 1000.0;
+        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
 
         // record the event of this copy
         if (split->n_inputs > 0) {
