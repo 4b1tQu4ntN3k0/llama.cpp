@@ -2534,7 +2534,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
         // const int64_t n_token_types = vocab.n_token_types();
         // const int64_t n_rot         = hparams.n_rot;
         const int64_t n_expert      = hparams.n_expert;
-        // const int64_t n_expert_used = hparams.n_expert_used;
+        const int64_t n_expert_used = hparams.n_expert_used;
         // const int64_t n_ctx_train   = hparams.n_ctx_train;
 
         if (n_expert > 0 && hparams.n_expert_used == 0) {
@@ -2740,6 +2740,50 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                         layer.ffn_gate = create_tensor(tn(LLM_TENSOR_FFN_GATE, "weight", i), {n_embd,   n_ff}, 0);
                         layer.ffn_down = create_tensor(tn(LLM_TENSOR_FFN_DOWN, "weight", i), {  n_ff, n_embd}, 0);
                         layer.ffn_up   = create_tensor(tn(LLM_TENSOR_FFN_UP,   "weight", i), {n_embd,   n_ff}, 0);
+                    }
+                } break;
+            case LLM_ARCH_QWEN3MOE:
+                {
+                    tok_embd = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, 0);
+
+                    // output
+                    output_norm = create_tensor(tn(LLM_TENSOR_OUTPUT_NORM, "weight"), {n_embd}, 0);
+                    output      = create_tensor(tn(LLM_TENSOR_OUTPUT,      "weight"), {n_embd, n_vocab}, TENSOR_NOT_REQUIRED);
+                    // if output is NULL, init from the input tok embed
+                    if (output == NULL) {
+                        output = create_tensor(tn(LLM_TENSOR_TOKEN_EMBD, "weight"), {n_embd, n_vocab}, TENSOR_DUPLICATED);
+                    }
+
+                    for (int i = 0; i < n_layer; ++i) {
+                        auto & layer = layers[i];
+
+                        layer.attn_norm = create_tensor(tn(LLM_TENSOR_ATTN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.wq = create_tensor(tn(LLM_TENSOR_ATTN_Q,   "weight", i), {n_embd, n_embd_head_k * n_head}, 0);
+                        layer.wk = create_tensor(tn(LLM_TENSOR_ATTN_K,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wv = create_tensor(tn(LLM_TENSOR_ATTN_V,   "weight", i), {n_embd, n_embd_gqa}, 0);
+                        layer.wo = create_tensor(tn(LLM_TENSOR_ATTN_OUT, "weight", i), {n_embd_head_k * n_head, n_embd}, 0);
+
+                        layer.attn_k_norm = create_tensor(tn(LLM_TENSOR_ATTN_K_NORM, "weight", i), {n_embd_head_k}, 0);
+                        layer.attn_q_norm = create_tensor(tn(LLM_TENSOR_ATTN_Q_NORM, "weight", i), {n_embd_head_k}, 0);
+
+                        layer.ffn_norm = create_tensor(tn(LLM_TENSOR_FFN_NORM, "weight", i), {n_embd}, 0);
+
+                        layer.ffn_gate_inp = create_tensor(tn(LLM_TENSOR_FFN_GATE_INP, "weight", i), {n_embd, n_expert}, 0);
+
+                        if (n_expert == 0) {
+                            throw std::runtime_error("n_expert must be > 0 for QWEN3MOE");
+                        }
+                        if (n_expert_used == 0) {
+                            throw std::runtime_error("n_expert_used must be > 0 for QWEN3MOE");
+                        }
+
+                        // MoE branch
+                        const int64_t n_ff_exp = hparams.n_ff_exp ? hparams.n_ff_exp : n_ff / n_expert_used;
+
+                        layer.ffn_gate_exps = create_tensor(tn(LLM_TENSOR_FFN_GATE_EXPS, "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
+                        layer.ffn_down_exps = create_tensor(tn(LLM_TENSOR_FFN_DOWN_EXPS, "weight", i), {n_ff_exp,   n_embd, n_expert}, 0);
+                        layer.ffn_up_exps   = create_tensor(tn(LLM_TENSOR_FFN_UP_EXPS,   "weight", i), {  n_embd, n_ff_exp, n_expert}, 0);
                     }
                 } break;
             default: 
@@ -7818,36 +7862,6 @@ ggml_tensor * llama_model::get_rope_factors(const llama_cparams & cparams, int i
     return layers[il].rope_short;
 }
 
-llama_memory_i * llama_model::create_memory_layer(const llama_memory_params & params, const llama_cparams & cparams) const {
-    llama_memory_i * res;
-    switch (arch) {
-        // Models that need specific instantiation should be handled in the
-        // switch statement
-        case LLM_ARCH_QWEN3: {
-            GGML_ASSERT(!hparams.is_swa_any());
-
-            res = new llama_kv_cache(
-                    *this,
-                    params.type_k,
-                    params.type_v,
-                    !cparams.flash_attn,
-                    cparams.offload_kqv,
-                    cparams.kv_unified,
-                    cparams.n_ctx_seq,
-                    cparams.n_seq_max,
-                    1,
-                    hparams.n_swa,
-                    hparams.swa_type,
-                    nullptr,
-                    nullptr);
-        } break;
-        default:
-            GGML_ASSERT(false);
-    }
-        
-    return res;
-}
-
 llama_memory_i * llama_model::create_memory(const llama_memory_params & params, const llama_cparams & cparams) const {
     llama_memory_i * res;
 
@@ -7990,21 +8004,6 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
     }
 
     return res;
-}
-
-ggml_cgraph * llama_model::build_graph_layer(const llm_graph_params & params, int layer_id) const {
-    std::unique_ptr<llm_graph_context> llm;
-
-    switch (arch) {
-        case LLM_ARCH_QWEN3:
-            {
-                llm = std::make_unique<llm_build_qwen3_layer>(*this, params, layer_id);
-            } break;
-        default:
-            GGML_ABORT("build_graph_layer fatal error");
-    }
-
-    return llm->res->get_gf();
 }
 
 ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {

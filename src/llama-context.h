@@ -110,12 +110,6 @@ struct llama_context {
             llama_memory_context_i * mctx,
                        ggml_status & ret);
 
-    llm_graph_result * process_ubatch_pipo(
-                const llama_ubatch & ubatch,
-                    llm_graph_type   gtype,
-            llama_memory_context_i * mctx,
-                       ggml_status & ret);
-
     int encode(const llama_batch & batch_inp);
     int decode(const llama_batch & batch_inp);
 
@@ -218,7 +212,6 @@ public:
     // reserve a graph with a dummy ubatch of the specified size
     ggml_cgraph * graph_reserve(
         uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false, size_t * sizes = nullptr);
-    ggml_status graph_reserve_pipo(uint32_t n_tokens, uint32_t n_seqs, uint32_t n_outputs, const llama_memory_context_i * mctx, bool split_only = false);
 
 private:
     llm_graph_params graph_params(
