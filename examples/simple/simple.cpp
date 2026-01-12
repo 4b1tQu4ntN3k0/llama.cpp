@@ -187,8 +187,8 @@ int main(int argc, char ** argv) {
     ctx_params.enable_pipo = enable_pipo;
     ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
-    ctx_params.cb_eval = my_eval_callback;
-    ctx_params.cb_eval_user_data = NULL;
+    // ctx_params.cb_eval = my_eval_callback;
+    // ctx_params.cb_eval_user_data = NULL;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
