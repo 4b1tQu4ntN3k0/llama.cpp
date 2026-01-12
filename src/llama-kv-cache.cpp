@@ -1251,7 +1251,7 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * k = layers[ikv].k;
-    if(enable_pipo && il>n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
+    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
         k = dynamic_layer.k;
     }
 
@@ -1274,7 +1274,7 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * v = layers[ikv].v;
-    if(enable_pipo && il>n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
+    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
         v = dynamic_layer.v;
     }
 
@@ -1311,7 +1311,7 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * k = layers[ikv].k;
-    if(enable_pipo && il>n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
+    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
         k = dynamic_layer.k;
     }
 
@@ -1349,7 +1349,7 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * v = layers[ikv].v;
-    if(enable_pipo && il>n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
+    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
         v = dynamic_layer.v;
     }
 

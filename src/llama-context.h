@@ -362,7 +362,6 @@ private:
     std::vector<int> layer_ids;
     int pipo_n_cpu_layers;
     int pipo_n_cpu_layers_pre;
-    std::vector<llm_graph_result_ptr> gf_res_prev_layers;
     std::vector<llm_graph_result_ptr> gf_res_reserve_layers;
 
 };
