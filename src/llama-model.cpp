@@ -2692,8 +2692,9 @@ void llama_model::load_vocab(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
+    using dev_buft = std::pair<ggml_backend_dev_t, ggml_backend_buffer_type_t>;
+    
     const auto & split_mode   = params.split_mode;
-    // const auto & n_gpu_layers = params.n_gpu_layers;
     const auto & use_mlock    = params.use_mlock;
     const auto & tensor_split = params.tensor_split;
 
@@ -2704,52 +2705,15 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s)\n", __func__, ml.use_mmap ? "true" : "false");
 
-    // build a list of buffer types for the CPU and GPU devices
-    pimpl->cpu_buft_list = make_cpu_buft_list(devices, false, true);
-    pimpl->cpu_host_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, false);
-    for (auto * dev : devices) {
-        buft_list_t buft_list = make_gpu_buft_list(dev, split_mode, tensor_split);
-        // add CPU buffer types as a fallback
-        buft_list.insert(buft_list.end(), pimpl->cpu_buft_list.begin(), pimpl->cpu_buft_list.end());
-        pimpl->gpu_buft_list.emplace(dev, std::move(buft_list));
-    }
     ggml_backend_dev_t cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-    if (cpu_dev == nullptr) {
-        throw std::runtime_error(format("%s: no CPU backend found", __func__));
-    }
-
-    auto get_layer_buft_list = [&](int il) -> llama_model::impl::layer_dev {
-        const bool is_swa = il < (int) hparams.n_layer && hparams.is_swa(il);
-        if (il >= n_static_gpu_layers) {
-            if((il - n_static_gpu_layers + 1) % (params.n_cpu_layers_per_split + 1) == 0){
-                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device CUDA_HOST, is_swa = %d\n", il, is_swa);
-                return {cpu_dev, &pimpl->cpu_host_buft_list};
-            }
-            else{
-                LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(cpu_dev), is_swa);
-                return {cpu_dev, &pimpl->cpu_buft_list};
-            }     
-        }
-        else{
-            auto * dev = devices.at(0);
-            LLAMA_LOG_DEBUG("load_tensors: layer %3d assigned to device %s, is_swa = %d\n", il, ggml_backend_dev_name(dev), is_swa);
-            return {dev, &pimpl->gpu_buft_list.at(dev)};
-        }
-    };
-
-    // assign the input layer
-    // there is very little benefit to offloading the input layer, so always keep it on the CPU
-    pimpl->dev_input = { cpu_dev, &pimpl->cpu_buft_list };
-
-    // assign the repeating layers to the devices according to the splits
-    pimpl->dev_layer.resize(n_layer);
-    for (int il = 0; il < n_layer; ++il) {
-        pimpl->dev_layer[il] = get_layer_buft_list(il);
-    }
-
-    // assign the output layer
-    pimpl->dev_output = { cpu_dev, &pimpl->cpu_buft_list };
-    // pimpl->dev_output = { cpu_dev, &pimpl->gpu_buft_list.at(devices.at(0)) };
+    ggml_backend_dev_t gpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_GPU);
+    auto * cpu_buft = ggml_backend_dev_buffer_type(cpu_dev);
+    auto * cuda_buft = ggml_backend_dev_buffer_type(gpu_dev);
+    auto * cuda_host_buft = ggml_backend_dev_host_buffer_type(gpu_dev);
+    
+    // dev_buft cuda_host = {gpu_dev, cuda_buft};
+    // dev_buft cpu = {cpu_dev, cpu_buft};
+    // dev_buft cuda = {gpu_dev, cuda_host_buft};
 
     // one ggml context per buffer type
     int max_n_tensors = ml.n_tensors;
@@ -2766,14 +2730,13 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     };
     std::map<ggml_backend_buffer_type_t, ggml_context_ptr, ggml_backend_buft_comparator> ctx_map;
     
-    ggml_init_params params_dynamic_layer = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors / n_layer * 2,
+    ggml_init_params params_dynamic = {
+        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors / n_layer + 5,
         /*.mem_buffer =*/ NULL,
         /*.no_alloc   =*/ true,
     };
-    ggml_context * ctx_dynamic_layer = ggml_init(params_dynamic_layer);
-    ggml_backend_buffer_type_t buft_dynamic_layer = ggml_backend_dev_buffer_type(devices[0]);
-    // ctx_map.emplace(buft_dynamic_layer, ctx_dynamic_layer);
+    ggml_context * ctx_dynamic = ggml_init(params_dynamic);
+    ggml_backend_buffer_type_t buft_dynamic = ggml_backend_dev_buffer_type(devices[0]);
 
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
@@ -2825,7 +2788,6 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
             throw std::runtime_error("model has expert layers but no expert layers are used");
         }
 
-        int n_moved_tensors = 0;
         ggml_tensor * first_moved_tensor = nullptr;
         ggml_backend_buffer_type_t first_moved_from_buft = nullptr;
         ggml_backend_buffer_type_t first_moved_to_buft = nullptr;
@@ -2890,22 +2852,6 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 }
             }
 
-            // select the buffer type for this tensor
-            buft_list_t * buft_list;
-            switch (info.layer) {
-                case LLM_TENSOR_LAYER_INPUT:
-                    buft_list = pimpl->dev_input.buft_list;
-                    break;
-                case LLM_TENSOR_LAYER_OUTPUT:
-                    buft_list = pimpl->dev_output.buft_list;
-                    break;
-                case LLM_TENSOR_LAYER_REPEATING:
-                    buft_list = pimpl->dev_layer.at(tn.bid).buft_list;
-                    break;
-                default:
-                    GGML_ABORT("invalid layer %d for tensor %s", info.layer, tn.str().c_str());
-            }
-
             ggml_backend_buffer_type_t buft = nullptr;
 
             // check overrides
@@ -2913,13 +2859,8 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 std::string tensor_name = tn.str();
                 for (const auto * overrides = ml.tensor_buft_overrides; overrides->pattern != nullptr; ++overrides) {
                     std::regex pattern(overrides->pattern);
-                    if (std::regex_search(tensor_name, pattern)) {
-                        if (overrides->buft == ggml_backend_cpu_buffer_type()) {
-                            // when overriding to a CPU buffer, consider the extra buffer types
-                            buft = select_weight_buft(hparams, t_meta, op, pimpl->cpu_buft_list);
-                        } else {
-                            buft = overrides->buft;
-                        }
+                    if (std::regex_search(tensor_name, pattern)) {                        
+                        buft = overrides->buft;
 
                         LLAMA_LOG_DEBUG("tensor %s (%zu MiB %s) buffer type overridden to %s\n",
                                 tensor_name.c_str(),
@@ -2929,32 +2870,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                     }
                 }
             }
-
-            if (!buft) {
-                buft = select_weight_buft(hparams, t_meta, op, *buft_list);
-                if (!buft) {
-                    throw std::runtime_error(format("failed to find a compatible buffer type for tensor %s", tn.str().c_str()));
-                }
-            }
-
-            // avoid using a host buffer when using mmap
-            auto * buft_dev = ggml_backend_buft_get_device(buft);
-            // if (ml.use_mmap && buft_dev && buft == ggml_backend_dev_host_buffer_type(buft_dev)) {
-            //     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
-            //     if (!cpu_dev) {
-            //         throw std::runtime_error("no CPU backend found");
-            //     }
-            //     buft = ggml_backend_dev_buffer_type(cpu_dev);
-            // }
-
-            if (buft != buft_list->front().second) {
-                n_moved_tensors++;
-                if (!first_moved_tensor) {
-                    first_moved_tensor = t_meta;
-                    first_moved_from_buft = buft_list->front().second;
-                    first_moved_to_buft   = buft;
-                }
-            }
+            assert(buft);
 
             ggml_context * ctx = ctx_for_buft(buft);
 
@@ -2976,16 +2892,15 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 return name;
             };
             // pipo check new weight type
-            if(info.layer == LLM_TENSOR_LAYER_REPEATING){
+            if(ggml_backend_buft_name(buft) == "CPU"){
                 llama_tensor_key tensor_k = {tn.tensor, t_meta->type};
                 if(!weight_map.count(tensor_k)){
-                    auto new_tensor = ml.create_tensor(ctx_dynamic_layer, tn, ne, flags);
+                    auto new_tensor = ml.create_tensor(ctx_dynamic, tn, ne, flags);
                     ggml_set_name(new_tensor, get_suffix(tn.str()).c_str());
                     weight_map[tensor_k] = new_tensor;
                 }
                 name_weight_map[t_meta->name] = weight_map[tensor_k];
             }
-            
             return ml.create_tensor(ctx, tn, ne, flags);
         };
 
@@ -3072,12 +2987,6 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 } break;
             default: 
                 throw std::runtime_error("only support qwen3 models now");
-        }
-
-        if (n_moved_tensors > 0) {
-            LLAMA_LOG_DEBUG("%s: tensor '%s' (%s) (and %d others) cannot be used with preferred buffer type %s, using %s instead\n",
-                __func__, first_moved_tensor->name, ggml_type_name(first_moved_tensor->type), n_moved_tensors - 1,
-                ggml_backend_buft_name(first_moved_from_buft), ggml_backend_buft_name(first_moved_to_buft));
         }
     }
 
@@ -3204,17 +3113,18 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     }
 
     {
-        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx_dynamic_layer, buft_dynamic_layer);
-        llama_buf_map buf_map_dl;
-        buf_map_dl.emplace(0, buf);
-        for (auto & buf : buf_map_dl) {
-            // indicate that this buffer contains weights
-            // this is used by ggml_backend_sched to improve op scheduling: ops that use a weight are preferably scheduled to the backend that contains the weight
-            ggml_backend_buffer_set_usage(buf.second, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-        }
-        if(!ml.load_all_data(ctx_dynamic_layer, buf_map_dl, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)){
-            return false;
-        }
+        ggml_backend_buffer_t buf = ggml_backend_alloc_ctx_tensors_from_buft(ctx_dynamic, buft_dynamic);
+        ggml_backend_buffer_set_usage(buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        // llama_buf_map buf_map_dl;
+        // buf_map_dl.emplace(0, buf);
+        // for (auto & buf : buf_map_dl) {
+        //     // indicate that this buffer contains weights
+        //     // this is used by ggml_backend_sched to improve op scheduling: ops that use a weight are preferably scheduled to the backend that contains the weight
+        //     ggml_backend_buffer_set_usage(buf.second, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        // }
+        // if(!ml.load_all_data(ctx_dynamic, buf_map_dl, use_mlock ? &pimpl->mlock_mmaps : NULL, params.progress_callback, params.progress_callback_user_data)){
+        //     return false;
+        // }
     }
     
 
