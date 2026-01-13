@@ -302,3 +302,6 @@ if (TARGET gguf-model-data)
     target_link_libraries(export-graph-ops PRIVATE gguf-model-data)
     target_compile_definitions(export-graph-ops PRIVATE LLAMA_HF_FETCH)
 endif()
+add_executable(test-backend-ops-perf test-backend-ops-perf.cpp)
+target_link_libraries(test-backend-ops-perf PRIVATE common ggml)
+
