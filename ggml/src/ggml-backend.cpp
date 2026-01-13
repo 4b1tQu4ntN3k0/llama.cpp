@@ -1800,7 +1800,7 @@ ggml_status pipo_send_data_async_synchronize(ggml_backend_sched_t sched, int id,
             break;
         }
         ggml_backend_tensor_set_async_synchronize_pipo(sched->dst_tensors[id][i]);
-        break;        
+        break;
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -2068,10 +2068,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
     std::vector<int32_t> ids;
     std::vector<ggml_bitset_t> used_ids;
 
-    ggml_time_init();
-    int64_t t_start, t_end;
-    double duration_ms;
-
     for (int split_id = 0; split_id < sched->n_splits; split_id++) {
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
@@ -2081,7 +2077,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             ggml_backend_synchronize(split_backend);
         }
 
-        t_start = ggml_time_us();
         // copy the input tensors to the split backend
         for (int input_id = 0; input_id < split->n_inputs; input_id++) {
             ggml_backend_t input_backend = ggml_backend_sched_get_tensor_backend(sched, split->inputs[input_id]);
@@ -2200,11 +2195,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
             }
         }
-        ggml_backend_synchronize(split_backend);
-        t_end = ggml_time_us();
-        duration_ms = (t_end - t_start) / 1000.0;
-        printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
-        t_start = ggml_time_us();
 
         if (sched->events[split_backend_id][sched->cur_copy] == NULL) {
             ggml_backend_synchronize(split_backend);
@@ -2217,7 +2207,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
             }
         } else {
             // similar to ggml_backend_compare_graph_backend
-            int cnt=0;
             for (int j0 = 0; j0 < split->graph.n_nodes; j0++) {
                 struct ggml_tensor * t = split->graph.nodes[j0];
 
@@ -2234,8 +2223,6 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
 
                 struct ggml_cgraph gv = ggml_graph_view(&split->graph, j0, j1 + 1);
 
-                t_start = ggml_time_us();
-
                 enum ggml_status ec = ggml_backend_graph_compute_async(split_backend, &gv);
                 if (ec != GGML_STATUS_SUCCESS) {
                     return ec;
@@ -2249,16 +2236,8 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
                 }
 
                 j0 = j1;
-
-                t_end = ggml_time_us();
-                duration_ms = (t_end - t_start) / 1000.0;
-                printf("\n\t%d split %d layer compute: %.3f ms\n", split_id, cnt++, duration_ms);
             }
         }
-        ggml_backend_synchronize(split_backend);
-        t_end = ggml_time_us();
-        duration_ms = (t_end - t_start) / 1000.0;
-        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
 
         // record the event of this copy
         if (split->n_inputs > 0) {
