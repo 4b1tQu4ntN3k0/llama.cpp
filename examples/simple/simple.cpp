@@ -133,7 +133,7 @@ int main(int argc, char ** argv) {
             }
         }
     }
-    int n_cpu_layers_per_split = 0;
+    // int n_cpu_layers_per_split = 0;
 
     // load dynamic backends
 
@@ -146,7 +146,7 @@ int main(int argc, char ** argv) {
     model_params.enable_pipo = enable_pipo;
     // model_params.no_host = false;
     model_params.use_mmap = true;
-    model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
+    // model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
     // model_params.use_extra_bufts = false;
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
@@ -179,10 +179,10 @@ int main(int argc, char ** argv) {
     // enable performance counters
     ctx_params.no_perf = false;
 
-    if(enable_pipo) ctx_params.op_offload = false;
+    // if(enable_pipo) ctx_params.op_offload = false;
 
     ctx_params.enable_pipo = enable_pipo;
-    ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
+    // ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     // ctx_params.cb_eval = my_eval_callback;
     // ctx_params.cb_eval_user_data = NULL;

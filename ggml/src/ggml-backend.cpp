@@ -1798,7 +1798,7 @@ ggml_status pipo_send_data_async_synchronize(ggml_backend_sched_t sched, int id,
             break;
         }
         ggml_backend_tensor_set_async_synchronize_pipo(sched->dst_tensors[id][i]);
-        break;        
+        break;
     }
     return GGML_STATUS_SUCCESS;
 }
@@ -2201,7 +2201,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_synchronize(split_backend);
         t_end = ggml_time_us();
         duration_ms = (t_end - t_start) / 1000.0;
-        printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
+        // printf("\n\t%d split load input: %.3f ms\n", split_id, duration_ms);
 
         t_start = ggml_time_us();
         if (!sched->callback_eval) {
@@ -2252,7 +2252,7 @@ static enum ggml_status ggml_backend_sched_compute_splits(ggml_backend_sched_t s
         ggml_backend_synchronize(split_backend);
         t_end = ggml_time_us();
         duration_ms = (t_end - t_start) / 1000.0;
-        printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
+        // printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
 
         // record the event of this copy
         if (split->n_inputs > 0) {
