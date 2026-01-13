@@ -136,7 +136,6 @@ int main(int argc, char ** argv) {
     // int n_cpu_layers_per_split = 0;
 
     // load dynamic backends
-
     ggml_backend_load_all();
 
     // initialize the model
