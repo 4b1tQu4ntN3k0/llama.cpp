@@ -67,6 +67,32 @@ static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data)
     return true;
 }
 
+// struct llama_model_tensor_buft_override {
+//     const char * pattern;
+//     ggml_backend_buffer_type_t buft;
+// };
+
+void pipo_tensor_layout(std::vector<llama_model_tensor_buft_override>& overrides,
+                        ggml_backend_buffer_type_t cuda, ggml_backend_buffer_type_t cuda_host){
+
+    overrides.clear();
+
+    const int n_layers = 40;
+    const int n_host_layers = 35;
+    const int start_layer = n_layers - n_host_layers;
+
+    overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight", cuda_host });
+    overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight", cuda_host });
+
+    // overrides.push_back({ "^token_embd\\.weight$", cuda_host });
+    // overrides.push_back({ "^output\\.weight$", cuda_host });
+    // overrides.push_back({ "^output_norm\\.weight$", cuda_host });
+    overrides.push_back({ ".*", cuda });
+
+    // Terminate with nullptr
+    overrides.push_back({ nullptr, nullptr });
+}
+
 int main(int argc, char ** argv) {
     // path to the model gguf file
     std::string model_path;
@@ -147,6 +173,25 @@ int main(int argc, char ** argv) {
     model_params.use_mmap = true;
     // model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
     // model_params.use_extra_bufts = false;
+    std::vector<llama_model_tensor_buft_override> overrides;
+
+    if(enable_pipo){
+        ggml_backend_buffer_type_t cuda,cuda_host;
+        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+            auto * dev = ggml_backend_dev_get(i);
+            auto * buft = ggml_backend_dev_buffer_type(dev);
+            if (buft) {
+                auto name = ggml_backend_buft_name(buft);
+                if (strstr(name, "CUDA")){
+                    cuda = buft;
+                    cuda_host = ggml_backend_dev_host_buffer_type(dev);
+                    break;
+                }
+            }
+        }
+        pipo_tensor_layout(overrides, cuda, cuda_host);
+        model_params.tensor_buft_overrides = overrides.data();
+    }
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 

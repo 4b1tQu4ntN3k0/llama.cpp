@@ -777,8 +777,8 @@ struct ggml_backend_sched {
     // pipo params
     bool enable_pipo;
     // int n_layers = 0;
-    int n_cpu_layers_per_split = 3;
-    int n_static_layers = 10;
+    // int n_cpu_layers_per_split = 3;
+    // int n_static_layers = 10;
     
 };
 
@@ -996,160 +996,6 @@ int pipo_extract_layer_id(const char * name) {
     return layer_id;
 }
 
-bool pipo_need_offload(ggml_backend_sched_t sched, struct ggml_tensor * leaf){
-    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
-    int n_static_layers = sched->n_static_layers;
-    
-    int layer_id = pipo_extract_layer_id(leaf->name);
-    if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0) {
-        // move to gpu
-        return true;
-    }
-    return false;
-}
-
-bool pipo_need_set_layer_out_backend(ggml_backend_sched_t sched, struct ggml_tensor * node){
-    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
-    int n_static_layers = sched->n_static_layers;
-    
-    int layer_id = pipo_extract_layer_id(node->name);
-    if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) != 0) {
-        // cpu layer
-        return true;
-    }
-    return false;
-
-}
-
-void split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
-    int gpu_backend = -1;
-    int cpu_backend = -1;
-    for (int i = 0; i < sched->n_backends; i++) {
-        if(cpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CPU") == 0){
-            cpu_backend = i;
-        }
-        else if(gpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CUDA0") == 0){
-            gpu_backend = i;
-        }
-    }
-    
-
-    for (int i = 0; i < graph->n_leafs; i++) {
-        struct ggml_tensor * leaf = graph->leafs[i];
-        int * leaf_backend_id = &tensor_backend_id(leaf);
-        
-        if(pipo_need_offload(sched, leaf)) {
-            // move to gpu
-            *leaf_backend_id = gpu_backend;
-        }
-    }
-    for (int i = 0; i < graph->n_nodes; i++) {
-        struct ggml_tensor * node = graph->nodes[i];
-        int * leaf_backend_id = &tensor_backend_id(node);
-        
-        if(pipo_need_offload(sched, node)) {
-            // move to gpu
-            *leaf_backend_id = gpu_backend;
-        }
-        else if(strstr(node->name, "l_out") != NULL && pipo_need_set_layer_out_backend(sched, node)){
-            // fix CPU l_out
-            *leaf_backend_id = cpu_backend;
-        }
-    }
-
-
-}
-
-
-void pipo_split(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
-    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
-    int n_static_layers = sched->n_static_layers;
-    int gpu_backend = 0;
-
-    for (int i = 0; i < graph->n_nodes; i++) {
-        struct ggml_tensor * node = graph->nodes[i];
-        int * node_backend_id = &tensor_backend_id(node);
-
-        int backend = ggml_backend_sched_backend_id_from_cur(sched, node);
-        if(backend != gpu_backend && backend != -1){
-            int layer_id = pipo_extract_layer_id(node->name);
-            if(layer_id == -1)continue;
-            if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0) {
-                // move to gpu
-                *node_backend_id = gpu_backend;
-                // tag leaves without layer_id
-                for (int j = 0; j < GGML_MAX_SRC; j++) {
-                    struct ggml_tensor * src = node->src[j];
-                    if (src == NULL) {
-                        continue;
-                    }
-                    int * src_backend_id = &tensor_backend_id(src);
-                    
-                    int src_layer_id = pipo_extract_layer_id(src->name);
-                    if(src_layer_id == -1){
-                        if(strstr(src->name, "leaf") != NULL){
-                            *src_backend_id = gpu_backend;
-                        }
-                        else if(strstr(src->name, "node") != NULL){
-                            int x = 1;
-                        }
-                    }
-                        
-                    
-                }
-            }
-        }
-    }
-    for (int i = 0; i < graph->n_leafs; i++) {
-        struct ggml_tensor * leaf = graph->leafs[i];
-        int * leaf_backend_id = &tensor_backend_id(leaf);
-
-        int backend = ggml_backend_sched_backend_id_from_cur(sched, leaf);
-        if(backend != gpu_backend && backend != -1){ //cpu
-            int layer_id = pipo_extract_layer_id(leaf->name);
-            // assert(layer_id!=-1);
-            if(layer_id == -1)continue;
-            if(layer_id >= n_static_layers && (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0) {
-                // move to gpu
-                *leaf_backend_id = gpu_backend;
-            }
-            // for(int j = 0; j < leaf)
-        }
-        
-    }
-
-}
-
-void pipo_set_norm(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
-    int n_cpu_layers_per_split = sched->n_cpu_layers_per_split;
-    int n_static_layers = sched->n_static_layers;
-
-    int gpu_backend = -1;
-    int cpu_backend = -1;
-    for (int i = 0; i < sched->n_backends; i++) {
-        if(cpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CPU") == 0){
-            cpu_backend = i;
-        }
-        else if(gpu_backend == -1 && strcmp(ggml_backend_name(sched->backends[i]), "CUDA0") == 0){
-            gpu_backend = i;
-        }
-    }
-    
-    for (int i = 0; i < graph->n_nodes; i++) {
-        struct ggml_tensor * node = graph->nodes[i];
-        int * node_backend_id = &tensor_backend_id(node);
-        int layer_id = pipo_extract_layer_id(node->name);
-        if(layer_id != -1 && (strstr(node->name, "norm") != NULL || strstr(node->name, "l_out") != NULL)){
-            if(layer_id < n_static_layers || (layer_id - n_static_layers + 1) % (n_cpu_layers_per_split + 1) == 0){
-                *node_backend_id = gpu_backend;
-            }
-            else{
-                *node_backend_id = cpu_backend;
-            }
-        }
-    }
-}
-
 void pipo_print_tensor_backend(ggml_backend_sched_t sched, struct ggml_cgraph * graph){
     // return;
     GGML_LOG_DEBUG("\n\tpipo_print_tensor_backend");
@@ -1192,12 +1038,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         GGML_ABORT("%s: failed to initialize context\n", __func__);
     }
 
-    // pipo_print_tensor_backend(sched, graph);
-    // pipo config
-    if(sched->enable_pipo){
-        // split(sched, graph);
-        pipo_set_norm(sched, graph);
-    }
     // pipo_print_tensor_backend(sched, graph);
 
     // pass 1: assign backends to ops with pre-allocated inputs
@@ -2272,9 +2112,7 @@ ggml_backend_sched_t ggml_backend_sched_new(
         size_t graph_size,
         bool parallel,
         bool op_offload,
-        bool enable_pipo,
-        uint32_t n_cpu_layers_per_split,
-        uint32_t n_static_layers) {
+        bool enable_pipo) {
     GGML_ASSERT(n_backends > 0);
     GGML_ASSERT(n_backends <= GGML_SCHED_MAX_BACKENDS);
     GGML_ASSERT(ggml_backend_dev_type(ggml_backend_get_device(backends[n_backends - 1])) == GGML_BACKEND_DEVICE_TYPE_CPU);
@@ -2334,8 +2172,6 @@ ggml_backend_sched_t ggml_backend_sched_new(
 
     // pipo params
     sched->enable_pipo = enable_pipo;
-    sched->n_cpu_layers_per_split = n_cpu_layers_per_split;
-    sched->n_static_layers = n_static_layers;
 
     ggml_backend_sched_reset(sched);
 

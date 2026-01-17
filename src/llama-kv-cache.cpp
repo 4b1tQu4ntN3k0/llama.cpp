@@ -227,11 +227,10 @@ llama_kv_cache::llama_kv_cache(
            llama_swa_type   swa_type,
     const layer_filter_cb & filter,
     const  layer_reuse_cb & reuse,
-                 uint32_t   n_gpu_layers,
-                 uint32_t   n_cpu_layers_per_split) :
+    const std::vector<ggml_backend_buffer_type_t>& mem_buft) :
     model(model), hparams(model.hparams), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
-    enable_pipo(true), n_gpu_layers(n_gpu_layers), n_cpu_layers_per_split(n_cpu_layers_per_split) {
+    enable_pipo(true){
 
     GGML_ASSERT(kv_size % n_pad == 0);
 
@@ -311,18 +310,21 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_embd_k_gqa =            hparams.n_embd_k_gqa(il);
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
 
-        const char * dev_name = "CPU";
+        const char * buft_name = "CPU";
 
-        ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
+        // ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
-        if (offload) {
-            auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
+        // if (offload) {
+        //     auto * dev = model.dev_layer(il);
+        //     buft = ggml_backend_dev_buffer_type(dev);
 
-            dev_name = ggml_backend_dev_name(dev);
-        }
+        //     dev_name = ggml_backend_dev_name(dev);
+        // }
+        
+        ggml_backend_buffer_type_t buft = mem_buft[il];
+        buft_name = ggml_backend_buft_name(buft);
 
-        LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
+        LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, buft_name);
 
         ggml_context * ctx = ctx_for_buft(buft);
         if (!ctx) {
@@ -372,38 +374,38 @@ llama_kv_cache::llama_kv_cache(
         }
     }
 
-    if(enable_pipo){
-        ggml_backend_t gpu_backend = nullptr;
-        ggml_backend_buffer_type_t gpu_buft = nullptr;
-        for (uint32_t i = 0; i < hparams.n_layer; ++i) {
-             auto * dev = model.dev_layer(i);
-             if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
-                 gpu_buft = ggml_backend_dev_buffer_type(dev);
-                 break;
-             }
-        }
-        GGML_ASSERT(gpu_buft);
-        LLAMA_LOG_INFO("%s: initializing dynamic layer on GPU\n", __func__);
-        auto ctx = ctx_for_buft(gpu_buft);
-        const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(0); 
-        const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(0) : hparams.n_embd_v_gqa_max();
+    // if(enable_pipo){
+    //     ggml_backend_t gpu_backend = nullptr;
+    //     ggml_backend_buffer_type_t gpu_buft = nullptr;
+    //     for (uint32_t i = 0; i < hparams.n_layer; ++i) {
+    //          auto * dev = model.dev_layer(i);
+    //          if (ggml_backend_dev_type(dev) == GGML_BACKEND_DEVICE_TYPE_GPU) {
+    //             gpu_buft = ggml_backend_dev_buffer_type(dev);
+    //             break;
+    //          }
+    //     }
+    //     GGML_ASSERT(gpu_buft);
+    //     LLAMA_LOG_INFO("%s: initializing dynamic layer on GPU\n", __func__);
+    //     auto ctx = ctx_for_buft(gpu_buft);
+    //     const uint32_t n_embd_k_gqa = hparams.n_embd_k_gqa(0); 
+    //     const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(0) : hparams.n_embd_v_gqa_max();
 
-        ggml_tensor * k = ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream);
-        ggml_tensor * v = ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream);
+    //     ggml_tensor * k = ggml_new_tensor_3d(ctx, type_k, n_embd_k_gqa, kv_size, n_stream);
+    //     ggml_tensor * v = ggml_new_tensor_3d(ctx, type_v, n_embd_v_gqa, kv_size, n_stream);
 
-        ggml_set_name(k, "cache_dynamic_k");
-        ggml_set_name(v, "cache_dynamic_v");
+    //     ggml_set_name(k, "cache_dynamic_k");
+    //     ggml_set_name(v, "cache_dynamic_v");
 
-        std::vector<ggml_tensor *> k_stream;
-        std::vector<ggml_tensor *> v_stream;
+    //     std::vector<ggml_tensor *> k_stream;
+    //     std::vector<ggml_tensor *> v_stream;
 
-        for (uint32_t s = 0; s < n_stream; ++s) {
-            k_stream.push_back(ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]));
-            v_stream.push_back(ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]));
-        }
+    //     for (uint32_t s = 0; s < n_stream; ++s) {
+    //         k_stream.push_back(ggml_view_2d(ctx, k, n_embd_k_gqa, kv_size, k->nb[1], s*k->nb[2]));
+    //         v_stream.push_back(ggml_view_2d(ctx, v, n_embd_v_gqa, kv_size, v->nb[1], s*v->nb[2]));
+    //     }
 
-        dynamic_layer = { 0, k, v, k_stream, v_stream, };
-    }
+    //     dynamic_layer = { 0, k, v, k_stream, v_stream, };
+    // }
 
     // allocate tensors and initialize the buffers to avoid NaNs in the padding
     for (auto & [buft, ctx] : ctx_map) {
@@ -1244,9 +1246,6 @@ ggml_tensor * llama_kv_cache::get_k(ggml_context * ctx, int32_t il, uint32_t n_k
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * k = layers[ikv].k;
-    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
-        k = dynamic_layer.k;
-    }
 
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_k_gqa = k->ne[0];
@@ -1267,9 +1266,6 @@ ggml_tensor * llama_kv_cache::get_v(ggml_context * ctx, int32_t il, uint32_t n_k
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * v = layers[ikv].v;
-    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
-        v = dynamic_layer.v;
-    }
 
     const uint64_t kv_size      = get_size();
     const uint64_t n_embd_v_gqa = v->ne[0];
@@ -1304,9 +1300,6 @@ ggml_tensor * llama_kv_cache::cpy_k(ggml_context * ctx, ggml_tensor * k_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * k = layers[ikv].k;
-    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
-        k = dynamic_layer.k;
-    }
 
     const int64_t n_embd_head = k_cur->ne[0];
     const int64_t n_head      = k_cur->ne[1];
@@ -1342,9 +1335,6 @@ ggml_tensor * llama_kv_cache::cpy_v(ggml_context * ctx, ggml_tensor * v_cur, ggm
     const int32_t ikv = map_layer_ids.at(il);
 
     ggml_tensor * v = layers[ikv].v;
-    if(enable_pipo && il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0) {
-        v = dynamic_layer.v;
-    }
 
     const int64_t n_embd_head = v_cur->ne[0];
     const int64_t n_head      = v_cur->ne[1];
