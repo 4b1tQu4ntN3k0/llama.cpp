@@ -2710,6 +2710,10 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
     auto * cpu_buft = ggml_backend_dev_buffer_type(cpu_dev);
     auto * cuda_buft = ggml_backend_dev_buffer_type(gpu_dev);
     auto * cuda_host_buft = ggml_backend_dev_host_buffer_type(gpu_dev);
+    mem_buft.resize(n_layer);
+    for(int i=0;i<n_layer;i++){
+        mem_buft[i] = cuda_buft;
+    }
     
     // dev_buft cuda_host = {gpu_dev, cuda_buft};
     // dev_buft cpu = {cpu_dev, cpu_buft};
@@ -2892,7 +2896,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 return name;
             };
             // pipo check new weight type
-            if(ggml_backend_buft_name(buft) == "CPU"){
+            if(strstr(ggml_backend_buft_name(buft), "CUDA_Host")){
                 llama_tensor_key tensor_k = {tn.tensor, t_meta->type};
                 if(!weight_map.count(tensor_k)){
                     auto new_tensor = ml.create_tensor(ctx_dynamic, tn, ne, flags);
@@ -8807,8 +8811,7 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
                                 hparams.swa_type,
                                 nullptr,
                                 nullptr,
-                                cparams.n_gpu_layers,
-                                cparams.n_cpu_layers_per_split);
+                                mem_buft);
                         }
                         else{
                             res = new llama_kv_cache(

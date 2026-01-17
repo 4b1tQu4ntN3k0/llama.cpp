@@ -122,8 +122,7 @@ public:
                llama_swa_type   swa_type,
         const layer_filter_cb & filter,
         const  layer_reuse_cb & reuse,
-                     uint32_t   n_gpu_layers,
-                     uint32_t   n_cpu_layers_per_split);
+        const std::vector<ggml_backend_buffer_type_t>& mem_buft);
 
     ~llama_kv_cache() = default;
 
@@ -236,8 +235,7 @@ private:
 
     // pipo params
     bool enable_pipo;
-    int n_gpu_layers;
-    int n_cpu_layers_per_split;
+    std::vector<ggml_backend_buffer_type_t> mem_buft;
 
     struct kv_layer {
         // layer index in the model
