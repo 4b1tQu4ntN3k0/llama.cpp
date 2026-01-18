@@ -1299,6 +1299,10 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             need_new_split = true;
                             break;
                         }
+                        if (sched->enable_pipo && strncmp(src->name, "dynamic_", 8) == 0) {
+                            need_new_split = true;
+                            break;
+                        }
                     }
                     // check if the split has too many inputs
                     // FIXME: count the number of inputs instead of only checking when full
@@ -1383,6 +1387,15 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     }
                     node->src[j] = tensor_id_copy(src_id, cur_backend_id, sched->cur_copy);
                 }
+
+                if(sched->enable_pipo){
+                    bool is_dynamic_weight = strncmp(src->name, "dynamic_", 8) == 0;
+                    if(is_dynamic_weight){
+                        int n_inputs = split->n_inputs++;
+                        GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
+                        split->inputs[n_inputs] = src;
+                    }
+                }
             }
         }
         split->i_end = graph->n_nodes;
@@ -1433,8 +1446,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         // add inputs to the graph copy so that they are allocated by ggml-alloc at the start of the split
         for (int j = 0; j < split->n_inputs; j++) {
             assert(graph_copy->size > (graph_copy->n_nodes + 1));
-
+            
             struct ggml_tensor * input = split->inputs[j];
+            if(sched->enable_pipo && strncmp(input->name, "dynamic_", 8) == 0) continue;
             const size_t input_id = hash_id(input);
             struct ggml_tensor * input_cpy = tensor_id_copy(input_id, split->backend_id, sched->cur_copy);
 
@@ -1492,22 +1506,6 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         sched->leaf_backend_ids[graph_copy->n_leafs] = tensor_backend_id(leaf);
         assert(graph_copy->size > graph_copy->n_leafs);
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
-    }
-
-    if(sched->enable_pipo){
-        int gpu_cnt = 0;
-        // GGML_ASSERT(n_gpu_layers)
-        for (int i = 0; i < sched->n_splits; i++) {
-            struct ggml_backend_sched_split * split = &sched->splits[i];
-            int backend_id = split->backend_id;
-            split->is_dynamic_layer=false;
-            if(backend_id==0){
-                gpu_cnt++;
-                if(gpu_cnt>1){
-                    split->is_dynamic_layer=true;
-                }
-            }
-        }
     }
 }
 

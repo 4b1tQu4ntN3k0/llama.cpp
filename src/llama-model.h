@@ -461,7 +461,6 @@ struct llama_model {
     struct ggml_tensor * per_layer_proj_norm  = nullptr;
 
     std::vector<llama_layer> layers;
-    std::vector<ggml_backend_buffer_type_t> mem_buft;
 
     //Dense linear projections for SentenceTransformers models like embeddinggemma
     // For Sentence Transformers models structure see
@@ -473,6 +472,10 @@ struct llama_model {
     using llama_tensor_key = std::pair<llm_tensor, ggml_type>; 
     std::map<llama_tensor_key, struct ggml_tensor *> weight_map;
     std::unordered_map<std::string, struct ggml_tensor *> name_weight_map;
+    std::vector<ggml_backend_buffer_type_t> mem_buft;
+    std::unordered_map<struct ggml_tensor *, std::vector<struct ggml_tensor *>> h2d_list;
+    std::vector<const char*> p_offload_weights;
+    std::vector<const char*> d_offload_weights;
 
     // gguf metadata
     std::unordered_map<std::string, std::string> gguf_kv;
