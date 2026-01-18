@@ -1,4 +1,22 @@
 #include "models.h"
+#include <regex>
+
+bool need_offload(const std::vector<std::regex>& regex, std::string name){
+    for(const auto & pattern: regex){
+        if (std::regex_search(name, pattern)){
+            return true;
+        }
+    }
+    return false;
+}
+void init_regex(std::vector<std::regex>& regex, const std::vector<const char*>& patterns){
+    regex.clear();
+    for(const auto &p:patterns){
+        if (p) {
+            regex.emplace_back(p);
+        }
+    }
+}
 
 llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
@@ -32,68 +50,38 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
     ggml_tensor * ffn_up;
     ggml_tensor * ffn_gate;
     ggml_tensor * ffn_down;
+    std::vector<std::regex> regex;
+    if(params.gtype == LLM_GRAPH_TYPE_DEFAULT_PREFILL){
+        init_regex(regex, model.p_offload_weights);
+    }
+    else{
+        GGML_ASSERT(params.gtype == LLM_GRAPH_TYPE_DEFAULT_DECODE);
+        init_regex(regex, model.d_offload_weights);
+    }
 
     for (int il = 0; il < n_layer; ++il) {
-        bool is_dynamic_layer = il>=n_gpu_layers && (il-n_gpu_layers+1)%(n_cpu_layers_per_split+1)==0;
-        if(is_dynamic_layer){
-            const llama_layer& layer = model.layers[il];
-            attn_norm = model.name_weight_map.at(std::string(layer.attn_norm->name));
-            wq = model.name_weight_map.at(std::string(layer.wq->name));
-            wk = model.name_weight_map.at(std::string(layer.wk->name));
-            wv = model.name_weight_map.at(std::string(layer.wv->name));
-            attn_q_norm = model.name_weight_map.at(std::string(layer.attn_q_norm->name));
-            attn_k_norm = model.name_weight_map.at(std::string(layer.attn_k_norm->name));
-            wo = model.name_weight_map.at(std::string(layer.wo->name));
-            bo = nullptr;
-            ffn_norm = model.name_weight_map.at(std::string(layer.ffn_norm->name));
-            ffn_up = model.name_weight_map.at(std::string(layer.ffn_up->name));
-            ffn_gate = model.name_weight_map.at(std::string(layer.ffn_gate->name));
-            ffn_down = model.name_weight_map.at(std::string(layer.ffn_down->name));
-            res->src_tensors.push_back({
-                model.layers[il].attn_norm,
-                model.layers[il].wq,
-                model.layers[il].wk,
-                model.layers[il].wv,
-                model.layers[il].attn_q_norm,
-                model.layers[il].attn_k_norm,
-                model.layers[il].wo,
-                model.layers[il].ffn_norm,
-                model.layers[il].ffn_up,
-                model.layers[il].ffn_gate,
-                model.layers[il].ffn_down,
-                get_kv_tensor(inp_attn, il).first,
-                get_kv_tensor(inp_attn, il).second,
-            });
-            res->dst_tensors.push_back({
-                attn_norm,
-                wq,
-                wk,
-                wv,
-                attn_q_norm,
-                attn_k_norm,
-                wo,
-                ffn_norm,
-                ffn_up,
-                ffn_gate,
-                ffn_down,
-                get_kv_tensor(inp_attn, -1).first,
-                get_kv_tensor(inp_attn, -1).second,
-            });
-        }
-        else{
-            attn_norm = model.layers[il].attn_norm;
-            wq = model.layers[il].wq;
-            wk = model.layers[il].wk;
-            wv = model.layers[il].wv;
-            attn_q_norm = model.layers[il].attn_q_norm;
-            attn_k_norm = model.layers[il].attn_k_norm;
-            wo = model.layers[il].wo;
-            bo = model.layers[il].bo;
-            ffn_norm = model.layers[il].ffn_norm;
-            ffn_up = model.layers[il].ffn_up;
-            ffn_gate = model.layers[il].ffn_gate;
-            ffn_down = model.layers[il].ffn_down;
-        }
+
+        auto get_offloaded = [&](ggml_tensor * t) {
+            if (t && need_offload(regex, std::string(t->name))) {
+                return model.name_weight_map.at(std::string(t->name));
+            }
+            return t;
+        };
+
+        const llama_layer& layer = model.layers[il];
+        attn_norm   = get_offloaded(layer.attn_norm);
+        wq          = get_offloaded(layer.wq);
+        wk          = get_offloaded(layer.wk);
+        wv          = get_offloaded(layer.wv);
+        attn_q_norm = get_offloaded(layer.attn_q_norm);
+        attn_k_norm = get_offloaded(layer.attn_k_norm);
+        wo          = get_offloaded(layer.wo);
+        bo          = get_offloaded(layer.bo);
+        ffn_norm    = get_offloaded(layer.ffn_norm);
+        ffn_up      = get_offloaded(layer.ffn_up);
+        ffn_gate    = get_offloaded(layer.ffn_gate);
+        ffn_down    = get_offloaded(layer.ffn_down);
+
         ggml_tensor * inpSA = inpL;
 
         // norm

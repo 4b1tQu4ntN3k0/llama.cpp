@@ -484,6 +484,8 @@ extern "C" {
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
 
+    LLAMA_API void llama_model_set_offload(struct llama_model * model, const char ** p_offload, const char ** d_offload, int size_p, int size_d);
+
     enum llama_params_fit_status {
         LLAMA_PARAMS_FIT_STATUS_SUCCESS = 0, // found allocations that are projected to fit
         LLAMA_PARAMS_FIT_STATUS_FAILURE = 1, // could not find allocations that are projected to fit
