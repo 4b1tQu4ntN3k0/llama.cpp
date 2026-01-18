@@ -3195,7 +3195,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
                 llama_tensor_key tensor_k = {tn.tensor, t_meta->type};
                 if(!weight_map.count(tensor_k)){
                     auto new_tensor = ml.create_tensor(ctx_dynamic, tn, ne, flags);
-                    ggml_set_name(new_tensor, get_suffix(tn.str()).c_str());
+                    ggml_set_name(new_tensor, ("dynamic_" + get_suffix(tn.str())).c_str());
                     weight_map[tensor_k] = new_tensor;
                 }
                 name_weight_map[t_meta->name] = weight_map[tensor_k];
@@ -9971,4 +9971,14 @@ ggml_backend_dev_t llama_model_get_device(const struct llama_model * model, int 
         return nullptr;
     }
     return model->devices[i].dev;
+}
+void llama_model_set_offload(struct llama_model * model, const char ** p_offload, const char ** d_offload, int size_p, int size_d){
+    model->p_offload_weights.resize(size_p);
+    model->d_offload_weights.resize(size_d);
+    for(int i=0;i<size_p;i++){
+        model->p_offload_weights[i] = p_offload[i];
+    }
+    for(int i=0;i<size_d;i++){
+        model->d_offload_weights[i] = d_offload[i];
+    }
 }
