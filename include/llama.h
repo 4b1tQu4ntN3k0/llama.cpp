@@ -515,6 +515,8 @@ extern "C" {
     // Frees all allocated memory
     LLAMA_API void llama_free(struct llama_context * ctx);
 
+    LLAMA_API void llama_model_set_offload(struct llama_model * model, const char ** p_offload, const char ** d_offload, int size_p, int size_d);
+
     LLAMA_API int64_t llama_time_us(void);
 
     LLAMA_API size_t llama_max_devices(void);

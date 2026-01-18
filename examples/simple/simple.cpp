@@ -78,10 +78,6 @@ void pipo_tensor_layout(std::vector<llama_model_tensor_buft_override>& overrides
 
     overrides.clear();
 
-    const int n_layers = 40;
-    const int n_host_layers = 35;
-    const int start_layer = n_layers - n_host_layers;
-
     overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight", cuda_host });
     overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight", cuda_host });
 
@@ -92,6 +88,17 @@ void pipo_tensor_layout(std::vector<llama_model_tensor_buft_override>& overrides
 
     // Terminate with nullptr
     overrides.push_back({ nullptr, nullptr });
+}
+
+void pipo_assign_offload(std::vector<const char*>& prefill_offload, std::vector<const char*>& decode_offload) {
+    prefill_offload.clear();
+    decode_offload.clear();
+    
+    prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight");
+    prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight");
+
+    decode_offload.push_back("blk\\.(3|7|11|15|19|23|27|31|35|39)\\.ffn_down\\.weight");
+    // decode_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight");
 }
 
 int main(int argc, char ** argv) {
@@ -214,6 +221,13 @@ int main(int argc, char ** argv) {
     if (llama_tokenize(vocab, prompt.c_str(), prompt.size(), prompt_tokens.data(), prompt_tokens.size(), true, true) < 0) {
         fprintf(stderr, "%s: error: failed to tokenize the prompt\n", __func__);
         return 1;
+    }
+
+    // pre-assign op_offload
+    std::vector<const char*> p_offload, d_offload;
+    if(enable_pipo){
+        pipo_assign_offload(p_offload, d_offload);
+        llama_model_set_offload(model, p_offload.data(), d_offload.data(), p_offload.size(), d_offload.size());
     }
 
     // initialize the context

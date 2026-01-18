@@ -448,12 +448,14 @@ void llama_context::sched_reserve() {
             }
             ggml_backend_dev_t device_fa = ggml_backend_get_device(ggml_backend_sched_get_tensor_backend(sched.get(), n));
 
-            // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
-            GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
-            const int il = std::stoi(n->name + prefix_len);
-            ggml_backend_dev_t device_kv = model.dev_layer(il);
-            if (device_fa != device_kv && ! cparams.enable_pipo) {
-                LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
+                // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
+                GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
+                const int il = std::stoi(n->name + prefix_len);
+                ggml_backend_dev_t device_kv;
+                if(cparams.enable_pipo) device_kv = ggml_backend_buft_get_device(model.mem_buft[il]);
+                else device_kv = model.dev_layer(il);
+                if (device_fa != device_kv && ! cparams.enable_pipo) {
+                    LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",
                         __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
                 // FIXME: fa_device_mismatch logic is wrong for --no-kv-offload, but this is broken anyways
@@ -2129,7 +2131,10 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * res = gf_res_reserve.get();
 
-    const auto gparams = graph_params(res, ubatch, mctx, LLM_GRAPH_TYPE_DEFAULT);
+    auto gtype = cparams.enable_pipo?(n_tokens > 1? LLM_GRAPH_TYPE_DEFAULT_PREFILL:LLM_GRAPH_TYPE_DEFAULT_DECODE)
+                                    :LLM_GRAPH_TYPE_DEFAULT;
+
+    const auto gparams = graph_params(res, ubatch, mctx, gtype);
 
     res->reset();
 
@@ -2173,7 +2178,7 @@ llm_graph_params llama_context::graph_params(
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),
-        /*.res         =*/ res,
+        /*.res         =*/ res
     };
 }
 
@@ -2217,6 +2222,7 @@ llm_graph_cb llama_context::graph_get_cb() const {
 
         // norm may be automatically assigned to the backend of the previous layer, increasing data transfer between backends
         // FIXME: fix in ggml_backend_sched
+        if(cparams.enable_pipo) return;
         const bool full_offload = model.n_gpu_layers() > model.hparams.n_layer;
         if (ubatch.n_tokens < 32 || full_offload) {
             if (il != -1 && strcmp(name, "norm") == 0) {
