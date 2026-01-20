@@ -23,6 +23,8 @@
 #include <algorithm>
 #include <vector>
 #include <map>
+#include <unordered_map>
+#include <string>
 
 #ifdef __APPLE__
 #include <sys/types.h>
@@ -800,9 +802,6 @@ struct ggml_backend_sched_split {
     int n_inputs;
     // graph view of this split
     struct ggml_cgraph graph;
-
-    // pipo info
-    bool is_dynamic_layer;
 };
 
 struct ggml_backend_sched {
@@ -830,9 +829,8 @@ struct ggml_backend_sched {
     struct ggml_cgraph graph;
 
     // pipo weight_map
-    // std::vector<std::vector<ggml_tensor *>> src_weight;
-    ggml_tensor * src_tensors[GGML_SCHED_PIPO_MAX_LAYERS][GGML_SCHED_PIPO_MAX_TENSOR_MAP_SIZE];
-    ggml_tensor * dst_tensors[GGML_SCHED_PIPO_MAX_LAYERS][GGML_SCHED_PIPO_MAX_TENSOR_MAP_SIZE];
+    std::unordered_map<std::string, std::vector<struct ggml_tensor *>> dynamic_tensor_list;
+    std::unordered_map<std::string, ggml_backend_event_t> dynamic_tensor_cpy_events;
 
     // graph splits
     struct ggml_backend_sched_split * splits;
@@ -1106,6 +1104,10 @@ void pipo_print_tensor_backend(ggml_backend_sched_t sched, struct ggml_cgraph * 
             GGML_LOG_DEBUG("\n%s: %s %d", node->name, ggml_backend_name(split_backend), node->type);
         }
     }
+}
+
+bool is_dynamic_tensor(struct ggml_tensor * tensor){
+    return strncmp(tensor->name, "dynamic_", 8) == 0;
 }
 
 
@@ -1391,7 +1393,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             need_new_split = true;
                             break;
                         }
-                        if (sched->enable_pipo && strncmp(src->name, "dynamic_", 8) == 0) {
+                        if (sched->enable_pipo && is_dynamic_tensor(src)) {
                             need_new_split = true;
                             break;
                         }
@@ -1481,8 +1483,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 }
 
                 if(sched->enable_pipo){
-                    bool is_dynamic_weight = strncmp(src->name, "dynamic_", 8) == 0;
-                    if(is_dynamic_weight){
+                    if(is_dynamic_tensor(src)){
                         int n_inputs = split->n_inputs++;
                         GGML_ASSERT(n_inputs < GGML_SCHED_MAX_SPLIT_INPUTS);
                         split->inputs[n_inputs] = src;
@@ -1540,7 +1541,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
             assert(graph_copy->size > (graph_copy->n_nodes + 1));
             
             struct ggml_tensor * input = split->inputs[j];
-            if(sched->enable_pipo && strncmp(input->name, "dynamic_", 8) == 0) continue;
+            if(sched->enable_pipo && is_dynamic_tensor(input)) continue;
             const size_t input_id = hash_id(input);
             struct ggml_tensor * input_cpy = tensor_id_copy(input_id, split->backend_id, sched->cur_copy);
 
@@ -1604,18 +1605,17 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
     for (int i = 0; i < sched->n_splits; ++i) {
         sched->splits[i].graph.uid = ggml_graph_next_uid();
     }
-    if(sched->enable_pipo){
-        int gpu_cnt = 0;
-        // GGML_ASSERT(n_gpu_layers)
-        for (int i = 0; i < sched->n_splits; i++) {
-            struct ggml_backend_sched_split * split = &sched->splits[i];
-            int backend_id = split->backend_id;
-            split->is_dynamic_layer=false;
-            if(backend_id==0){
-                gpu_cnt++;
-                if(gpu_cnt>1){
-                    split->is_dynamic_layer=true;
-                }
+    // init dynamic tensors list && cpy_event
+    sched->dynamic_tensor_list.clear();
+    sched->dynamic_tensor_cpy_events.clear();
+    for (int i = 0; i < sched->n_splits; i++) {
+        struct ggml_backend_sched_split * split = &sched->splits[i];
+        for (int j = 0; j < split->n_inputs; j++) {
+            struct ggml_tensor * input = split->inputs[j];
+            if(is_dynamic_tensor(input)){
+                std::string name = input->name;
+                // sched->dynamic_tensor_list[name].push_back();
+                // sched->dynamic_tensor_cpy_events[name] = ;
             }
         }
     }
@@ -1682,6 +1682,10 @@ static enum ggml_status copy_split_input(ggml_backend_sched_t sched, struct ggml
         struct ggml_tensor * input = split->inputs[input_id];
         struct ggml_tensor * input_cpy = tensor_copy(input, split_backend_id, sched->cur_copy);
 
+        // skip dynamic tensors
+        if(is_dynamic_tensor(input)){
+            continue;
+        }
 
         // PIPO: Use SM Copy for Input Tensors to avoid blocking DMA
         bool dst_is_cuda = ggml_backend_is_cuda(split_backend);
@@ -1786,20 +1790,6 @@ static enum ggml_status ggml_backend_sched_compute_splits_sync_pipo(ggml_backend
         struct ggml_backend_sched_split * split = &splits[split_id];
         int split_backend_id = split->backend_id;
         ggml_backend_t split_backend = sched->backends[split_backend_id];
-
-        t_start = ggml_time_us();
-        if(split->is_dynamic_layer){
-            dynamic_layer_id++;
-            // dynamic_split = sched->layers[layer_cnt++];
-            ret = pipo_send_data_async(sched, dynamic_layer_id, split_backend);
-            if(ret != GGML_STATUS_SUCCESS){
-                return ret;
-            }
-            ggml_backend_synchronize(split_backend);
-        }
-        t_end = ggml_time_us();
-        duration_ms = (t_end - t_start) / 1000.0;
-        printf("\n\t%d split copy weight & cache: %.3f ms\n", split_id, duration_ms);
 
         t_start = ggml_time_us();
         {
@@ -2858,15 +2848,21 @@ ggml_backend_buffer_t ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size) 
     return ggml_backend_buffer_init(ggml_backend_cpu_buffer_from_ptr_type(), ggml_backend_cpu_buffer_from_ptr_i, ptr, size);
 }
 
-void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, struct ggml_tensor ** src, struct ggml_tensor ** dst, int dynamic_layer_id, int n_tensors) {
+void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, const char * name, struct ggml_tensor ** tensors, int n_tensors) {
     GGML_ASSERT(sched);
-    GGML_ASSERT(src);
-    GGML_ASSERT(dst);
+    GGML_ASSERT(name);
+    GGML_ASSERT(tensors);
     GGML_ASSERT(n_tensors > 0 && n_tensors < GGML_SCHED_PIPO_MAX_TENSOR_MAP_SIZE);
-    GGML_ASSERT(dynamic_layer_id >= 0 && dynamic_layer_id < GGML_SCHED_PIPO_MAX_LAYERS);
 
+    auto& list = sched->dynamic_tensor_list[name];
+    list.clear();
     for(int i=0;i<n_tensors;i++){
-        sched->src_tensors[dynamic_layer_id][i] = src[i];
-        sched->dst_tensors[dynamic_layer_id][i] = dst[i];
+        list.push_back(tensors[i]);
+    }
+    auto & event = sched->dynamic_tensor_cpy_events[name];
+    if(event == NULL){
+        auto dev = sched->backends[0]->device;
+        assert(ggml_backend_name(sched->backends[0]) == "CUDA0");
+        event = ggml_backend_event_new(dev);
     }
 }
