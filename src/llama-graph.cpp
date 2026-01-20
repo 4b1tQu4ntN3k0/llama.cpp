@@ -757,8 +757,7 @@ void llm_graph_result::reset() {
 
     gf = ggml_new_graph_custom(ctx_compute.get(), max_nodes, false);
 
-    src_tensors.clear();
-    dst_tensors.clear();
+    dynamic_tensor_list.clear();
 }
 
 void llm_graph_result::set_inputs(const llama_ubatch * ubatch) {
