@@ -416,7 +416,7 @@ void llama_context::sched_reserve() {
     gf_res_prev.reset(new llm_graph_result(max_nodes));
     gf_res_reserve.reset(new llm_graph_result(max_nodes));
 
-    sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
+    sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload, cparams.enable_pipo));
 
     llama_memory_context_ptr mctx;
     if (memory) {
@@ -448,13 +448,13 @@ void llama_context::sched_reserve() {
             }
             ggml_backend_dev_t device_fa = ggml_backend_get_device(ggml_backend_sched_get_tensor_backend(sched.get(), n));
 
-                // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
-                GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
-                const int il = std::stoi(n->name + prefix_len);
-                ggml_backend_dev_t device_kv;
-                if(cparams.enable_pipo) device_kv = ggml_backend_buft_get_device(model.mem_buft[il]);
-                else device_kv = model.dev_layer(il);
-                if (device_fa != device_kv && ! cparams.enable_pipo) {
+            // TODO: instead of the tensor names, use a map to keep track of which (FA) tensors belong to which layer
+            GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
+            const int il = std::stoi(n->name + prefix_len);
+            ggml_backend_dev_t device_kv;
+            if(cparams.enable_pipo) device_kv = ggml_backend_buft_get_device(model.mem_buft[il]);
+            else device_kv = model.dev_layer(il);
+            if (device_fa != device_kv && ! cparams.enable_pipo) {
                     LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",
                         __func__, il, ggml_backend_dev_name(device_kv), ggml_backend_dev_name(device_fa));
@@ -572,7 +572,7 @@ void llama_context::sched_reserve() {
             if (cparams.pipeline_parallel) {
                 LLAMA_LOG_WARN("%s: compute buffer allocation failed, retrying without pipeline parallelism\n", __func__);
                 cparams.pipeline_parallel = false;
-                sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload));
+                sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, false, cparams.op_offload, cparams.enable_pipo));
                 gf = graph_reserve(n_tokens, n_seqs, n_tokens, mctx.get());
             }
             if (!gf) {
@@ -1189,7 +1189,12 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
     // the new graph parameters
     // in order to correctly reuse a graph, it's full topology has to be uniquely determined by these parameters
-    const auto gparams = graph_params(res, ubatch, mctx, gtype);
+    auto pipo_gtype = cparams.enable_pipo?
+                            (ubatch.n_tokens > 1 && gtype == LLM_GRAPH_TYPE_DECODER? 
+                                LLM_GRAPH_TYPE_DEFAULT_PREFILL:
+                                LLM_GRAPH_TYPE_DEFAULT_DECODE):
+                            gtype;
+    const auto gparams = graph_params(res, ubatch, mctx, pipo_gtype);
 
     if (!graph_reuse_disable && res->can_reuse(gparams)) {
         //LLAMA_LOG_DEBUG("%s: reusing previous graph\n", __func__);
@@ -1220,8 +1225,8 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         if(cparams.enable_pipo){
-            for(int i=0;i<res->src_tensors.size();i++){
-                ggml_backend_sched_set_pipo_tensor_map(sched.get(), res->src_tensors[i].data(), res->dst_tensors[i].data(), i, res->src_tensors[i].size());
+            for(auto& [name,list]:res->dynamic_tensor_list){
+                ggml_backend_sched_set_pipo_tensor_map(sched.get(), name.c_str(), list.data(), list.size());
             }
         }
     }
