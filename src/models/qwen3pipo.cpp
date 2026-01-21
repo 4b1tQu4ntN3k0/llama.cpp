@@ -64,6 +64,9 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
         auto get_offloaded = [&](ggml_tensor * t) {
             if (t && need_offload(regex, std::string(t->name))) {
                 struct ggml_tensor * dynamic_tensor =  model.name_weight_map.at(std::string(t->name));
+                if(res->dynamic_tensor_list[dynamic_tensor->name].empty()){
+                    res->dynamic_tensor_list[dynamic_tensor->name].push_back(dynamic_tensor);
+                }
                 res->dynamic_tensor_list[dynamic_tensor->name].push_back(t);
                 return dynamic_tensor;
             }
