@@ -1359,6 +1359,7 @@ struct ggml_backend_cuda_context {
     cublasHandle_t cublas_handles[GGML_CUDA_MAX_DEVICES] = {nullptr};
 
     int curr_stream_no = 0;
+    cudaStream_t transfer_stream;
 
 #ifdef USE_CUDA_GRAPH
     // Map from first_node_ptr to cuda_graph - allows multiple graphs per context
@@ -1430,6 +1431,13 @@ struct ggml_backend_cuda_context {
     }
 
     cudaStream_t stream() { return stream(device, curr_stream_no); }
+
+    cudaStream_t trans_stream() { 
+        if(transfer_stream == nullptr){
+            CUDA_CHECK(cudaStreamCreateWithFlags(&transfer_stream, cudaStreamNonBlocking));
+        }
+        return transfer_stream;
+    }
 
     ggml_cuda_stream_context & stream_context() { return concurrent_stream_context; }
 
