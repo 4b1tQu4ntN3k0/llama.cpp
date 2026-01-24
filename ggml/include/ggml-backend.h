@@ -368,7 +368,7 @@ extern "C" {
     GGML_API ggml_backend_buffer_t      ggml_backend_cpu_buffer_from_ptr(void * ptr, size_t size);
     GGML_API ggml_backend_buffer_type_t ggml_backend_cpu_buffer_type(void);
 
-    GGML_API void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, const char * name, struct ggml_tensor ** tensors, int n_tensors);
+    GGML_API void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, const char * name, struct ggml_tensor ** src_tensors, struct ggml_tensor ** dst_tensors, int n_tensors);
 
 #ifdef  __cplusplus
 }
