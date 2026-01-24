@@ -1168,8 +1168,9 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         if(cparams.enable_pipo){
-            for(auto& [name,list]:res->dynamic_tensor_list){
-                ggml_backend_sched_set_pipo_tensor_map(sched.get(), name.c_str(), list.data(), list.size());
+            for(auto& [name,src_list]:res->dynamic_src_tensor_list){
+                auto& dst_list = res->dynamic_dst_tensor_list[name];
+                ggml_backend_sched_set_pipo_tensor_map(sched.get(), name.c_str(), src_list.data(), dst_list.data(), src_list.size());
             }
         }
     }

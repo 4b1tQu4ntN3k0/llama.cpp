@@ -680,7 +680,8 @@ public:
 
     int64_t max_nodes;
 
-    std::unordered_map<std::string, std::vector<struct ggml_tensor *>> dynamic_tensor_list;
+    std::unordered_map<std::string, std::vector<struct ggml_tensor *>> dynamic_src_tensor_list;
+    std::unordered_map<std::string, std::vector<struct ggml_tensor *>> dynamic_dst_tensor_list;
 
 private:
     // keep a copy of the previous graph parameters
