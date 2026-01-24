@@ -601,6 +601,9 @@ ggml_backend_cuda_context::~ggml_backend_cuda_context() {
     if (copy_event != nullptr) {
         CUDA_CHECK(cudaEventDestroy(copy_event));
     }
+    if (transfer_stream != nullptr) {
+        CUDA_CHECK(cudaStreamDestroy(transfer_stream));
+    }
     for (int i = 0; i < GGML_CUDA_MAX_DEVICES; ++i) {
         for (int j = 0; j < GGML_CUDA_MAX_STREAMS; ++j) {
             if (streams[i][j] != nullptr) {
@@ -4549,6 +4552,12 @@ static void ggml_backend_cuda_record_async_set(ggml_backend_t backend, ggml_back
 
     GGML_ASSERT(buf->buft == ggml_backend_cuda_buffer_type(cuda_ctx->device) && "unsupported buffer type");
 
+    if (!cuda_ctx->copy_event) {
+        CUDA_CHECK(cudaEventCreateWithFlags(&cuda_ctx->copy_event, cudaEventDisableTiming));
+    }
+    CUDA_CHECK(cudaEventRecord(cuda_ctx->copy_event, cuda_ctx->stream()));
+    CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->trans_stream(), cuda_ctx->copy_event, 0));
+
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->trans_stream()));
 
     CUDA_CHECK(cudaEventRecord((cudaEvent_t)event->context, cuda_ctx->trans_stream()));
@@ -4558,7 +4567,7 @@ static void ggml_backend_cuda_wait_async_set(ggml_backend_t backend, ggml_backen
     ggml_backend_cuda_context * cuda_ctx = (ggml_backend_cuda_context *)backend->context;
 
     if (ggml_backend_is_cuda(backend)) {
-        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->trans_stream(), (cudaEvent_t)event->context, 0));
+        CUDA_CHECK(cudaStreamWaitEvent(cuda_ctx->stream(), (cudaEvent_t)event->context, 0));
     } else {
 #if 0
         // untested
