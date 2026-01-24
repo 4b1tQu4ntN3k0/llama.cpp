@@ -12,9 +12,36 @@ static void print_usage(int, char ** argv) {
 }
 
 
+#define QK_K 256
+#define K_SCALE_SIZE 12
+
+typedef struct {
+    union {
+        struct {
+            ggml_fp16_t d;
+            ggml_fp16_t dmin;
+        } s;
+        uint32_t dm;
+    } u;
+    uint8_t scales[K_SCALE_SIZE];
+    uint8_t qs[QK_K/2];
+} block_q4_K;
+
+typedef struct {
+    uint8_t ql[QK_K/2];
+    uint8_t qh[QK_K/4];
+    int8_t  scales[QK_K/16];
+    ggml_fp16_t d;
+} block_q6_K;
+
+extern "C" {
+    void dequantize_row_q4_K(const block_q4_K * x, float * y, int64_t k);
+    void dequantize_row_q6_K(const block_q6_K * x, float * y, int64_t k);
+}
+
 void dump_tensor(ggml_tensor* input){
     // return;
-    
+    if(!input) return;
     FILE * fp = fopen("logs/input_dump.log", "a");
     if (fp) {
         fprintf(fp, "input: %s type: %s shape: %ld %ld %ld %ld\n", input->name, ggml_type_name(input->type), input->ne[0], input->ne[1], input->ne[2], input->ne[3]);
@@ -26,6 +53,24 @@ void dump_tensor(ggml_tensor* input){
             ggml_backend_tensor_get(input, data, 0, sizeof(float) * n_print);
             for (int i = 0; i < n_print; i++) {
                 fprintf(fp, "%f ", data[i]);
+            }
+            fprintf(fp, "\n");
+        } else if (input->type == GGML_TYPE_Q4_K) {
+            block_q4_K data;
+            ggml_backend_tensor_get(input, &data, 0, sizeof(block_q4_K));
+            float out[QK_K];
+            dequantize_row_q4_K(&data, out, QK_K);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%f ", out[i]);
+            }
+            fprintf(fp, "\n");
+        } else if (input->type == GGML_TYPE_Q6_K) {
+            block_q6_K data;
+            ggml_backend_tensor_get(input, &data, 0, sizeof(block_q6_K));
+            float out[QK_K];
+            dequantize_row_q6_K(&data, out, QK_K);
+            for (int i = 0; i < n_print; i++) {
+                fprintf(fp, "%f ", out[i]);
             }
             fprintf(fp, "\n");
         } else if (input->type == GGML_TYPE_I32) {
@@ -59,11 +104,14 @@ static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data)
     if (ask) {
         // Return true to observe this tensor
         // You can filter by name here, e.g.:
-        return strstr(t->name, "weight")!=NULL;
+        // return false;
+        return strstr(t->name, "ffn_up")!=NULL || strstr(t->name, "ffn_out")!=NULL;
         // return true; 
     }
     
     dump_tensor(t);
+    dump_tensor(t->src[0]);
+    dump_tensor(t->src[1]);
     
     return true;
 }
@@ -81,7 +129,7 @@ void pipo_tensor_layout(std::vector<llama_model_tensor_buft_override>& overrides
     overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight", cuda_host });
     overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight", cuda_host });
 
-    // overrides.push_back({ "^token_embd\\.weight$", cuda_host });
+    overrides.push_back({ "^token_embd\\.weight$", cuda_host });
     // overrides.push_back({ "^output\\.weight$", cuda_host });
     // overrides.push_back({ "^output_norm\\.weight$", cuda_host });
     overrides.push_back({ ".*", cuda });
