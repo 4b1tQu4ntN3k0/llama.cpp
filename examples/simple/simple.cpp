@@ -119,17 +119,28 @@ static bool my_eval_callback(struct ggml_tensor * t, bool ask, void * user_data)
 //     const char * pattern;
 //     ggml_backend_buffer_type_t buft;
 // };
+std::string model_path;
 
 void pipo_tensor_layout(std::vector<llama_model_tensor_buft_override>& overrides,
                         ggml_backend_buffer_type_t cuda, ggml_backend_buffer_type_t cuda_host){
 
     overrides.clear();
 
-    // qwen3-14B
-    overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight", cuda_host });
-    overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight", cuda_host });
-    overrides.push_back({ "^token_embd\\.weight$", cuda_host });
-    overrides.push_back({ ".*", cuda });
+    if(model_path.find("14B") != model_path.npos){
+        // qwen3-14B
+        overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight", cuda_host });
+        overrides.push_back({ "blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight", cuda_host });
+        overrides.push_back({ "^token_embd\\.weight$", cuda_host });
+        overrides.push_back({ ".*", cuda });
+    }
+    else{
+        // qwen3-32B
+        overrides.push_back({ "blk\\.([0-9]|[1-6][0-9])\\.ffn_down\\.weight", cuda_host });
+        overrides.push_back({ "blk\\.([0-9]|[1-6][0-9])\\.ffn_up\\.weight", cuda_host });
+        overrides.push_back({ "blk\\.([0-9]|[1-6][0-9])\\.ffn_gate\\.weight", cuda_host });
+        overrides.push_back({ "^token_embd\\.weight$", cuda_host });
+        overrides.push_back({ ".*", cuda });
+    }
 
     // Terminate with nullptr
     overrides.push_back({ nullptr, nullptr });
@@ -139,15 +150,25 @@ void pipo_assign_offload(std::vector<const char*>& prefill_offload, std::vector<
     prefill_offload.clear();
     decode_offload.clear();
     
-    // qwen3-14B
-    prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight");
-    prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight");
-    decode_offload.push_back("blk\\.(2|5|8|11|14|17|20|23|26|29|32|35|38)\\.ffn_down\\.weight");
+    if(model_path.find("14B") != model_path.npos){
+        // qwen3-14B
+        prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_down\\.weight");
+        prefill_offload.push_back("blk\\.([0-9]|[1-3][0-9])\\.ffn_up\\.weight");
+        decode_offload.push_back("blk\\.(2|5|8|11|14|17|20|23|26|29|32|35|38)\\.ffn_down\\.weight");
+    }
+    else{
+        // qwen3-32B
+        prefill_offload.push_back("blk\\.([0-9]|[1-6][0-9])\\.ffn_down\\.weight");
+        prefill_offload.push_back("blk\\.([0-9]|[1-6][0-9])\\.ffn_up\\.weight");
+        prefill_offload.push_back("blk\\.([0-9]|[1-6][0-9])\\.ffn_gate\\.weight");
+        decode_offload.push_back("blk\\.([0-9]|[1-6][0-9])\\.ffn_down\\.weight");
+    }
+    
 }
 
 int main(int argc, char ** argv) {
     // path to the model gguf file
-    std::string model_path;
+    
     // prompt to generate text from
     std::string prompt = "Once upon a time, in a land far, far away, there was a small village nestled between two great mountains. The villagers were known for their kindness and their peculiar habit of singing to the stars every night. One day, a mysterious traveler arrived at the village gates, carrying nothing but a worn-out leather bag and a wooden staff. The traveler claimed to have come from the other side of the world, seeking a legendary artifact said to be hidden deep within the caves of the northern mountain.";
     // number of layers to offload to the GPU
