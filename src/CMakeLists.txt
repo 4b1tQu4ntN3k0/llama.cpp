@@ -150,6 +150,8 @@ add_library(llama
             models/t5-enc.cpp
             models/wavtokenizer-dec.cpp
             models/xverse.cpp
+            models/mistral3.cpp
+            pipo_op_perf.cpp
             )
 
 set_target_properties(llama PROPERTIES
