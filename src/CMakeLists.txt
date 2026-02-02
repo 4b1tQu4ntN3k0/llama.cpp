@@ -126,8 +126,8 @@ add_library(llama
             models/qwen3.cpp
             models/qwen35.cpp
             models/qwen35moe.cpp
-            models/qwen3layer.cpp
-            models/qwen3pipo.cpp
+            models/qwen3_pipo.cpp
+            models/qwen3moe_pipo.cpp
             models/qwen3moe.cpp
             models/qwen3next.cpp
             models/qwen3vl-moe.cpp

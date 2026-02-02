@@ -1,27 +1,8 @@
 #include "models.h"
 #include <regex>
 
-bool need_offload(const std::vector<std::regex>& regex, std::string name){
-    for(const auto & pattern: regex){
-        if (std::regex_search(name, pattern)){
-            return true;
-        }
-    }
-    return false;
-}
-void init_regex(std::vector<std::regex>& regex, const std::vector<const char*>& patterns){
-    regex.clear();
-    for(const auto &p:patterns){
-        if (p) {
-            regex.emplace_back(p);
-        }
-    }
-}
-
-llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
+llm_build_qwen3moe_pipo::llm_build_qwen3moe_pipo(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     const int64_t n_embd_head = hparams.n_embd_head_v;
-    const int n_gpu_layers = model.n_gpu_layers();
-    const int n_cpu_layers_per_split = model.n_cpu_layers_per_split();
 
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k);
     GGML_ASSERT(n_embd_head == hparams.n_rot);
@@ -47,43 +28,65 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
     ggml_tensor * wo;
     ggml_tensor * bo;
     ggml_tensor * ffn_norm;
-    ggml_tensor * ffn_up;
-    ggml_tensor * ffn_gate;
-    ggml_tensor * ffn_down;
+    ggml_tensor * ffn_gate_inp;
+    ggml_tensor * ffn_up_exps;
+    ggml_tensor * ffn_gate_exps;
+    ggml_tensor * ffn_down_exps;
+
     std::vector<std::regex> regex;
     if(params.gtype == LLM_GRAPH_TYPE_DEFAULT_PREFILL){
-        init_regex(regex, model.p_offload_weights);
+        for(const auto &p:model.p_offload_weights){
+            if (p) {
+                regex.emplace_back(p);
+            }
+        }
     }
     else{
         GGML_ASSERT(params.gtype == LLM_GRAPH_TYPE_DEFAULT_DECODE);
-        init_regex(regex, model.d_offload_weights);
+        for(const auto &p:model.d_offload_weights){
+            if (p) {
+                regex.emplace_back(p);
+            }
+        }
     }
+
+    auto get_offloaded = [&](ggml_tensor * t) {
+        
+        auto need_offload = [&](const std::vector<std::regex>& regex, std::string name){
+            for(const auto & pattern: regex){
+                if (std::regex_search(name, pattern)){
+                    return true;
+                }
+            }
+            return false;
+        };
+
+        if (t && need_offload(regex, std::string(t->name))) {
+            struct ggml_tensor * dynamic_tensor =  model.name_weight_map.at(std::string(t->name));
+            res->dynamic_src_tensor_list[dynamic_tensor->name].push_back(t);
+            res->dynamic_dst_tensor_list[dynamic_tensor->name].push_back(dynamic_tensor);
+            return dynamic_tensor;
+        }
+        return t;
+    };
+
 
     for (int il = 0; il < n_layer; ++il) {
 
-        auto get_offloaded = [&](ggml_tensor * t) {
-            if (t && need_offload(regex, std::string(t->name))) {
-                struct ggml_tensor * dynamic_tensor =  model.name_weight_map.at(std::string(t->name));
-                res->dynamic_src_tensor_list[dynamic_tensor->name].push_back(t);
-                res->dynamic_dst_tensor_list[dynamic_tensor->name].push_back(dynamic_tensor);
-                return dynamic_tensor;
-            }
-            return t;
-        };
-
         const llama_layer& layer = model.layers[il];
-        attn_norm   = get_offloaded(layer.attn_norm);
-        wq          = get_offloaded(layer.wq);
-        wk          = get_offloaded(layer.wk);
-        wv          = get_offloaded(layer.wv);
-        attn_q_norm = get_offloaded(layer.attn_q_norm);
-        attn_k_norm = get_offloaded(layer.attn_k_norm);
-        wo          = get_offloaded(layer.wo);
-        bo          = get_offloaded(layer.bo);
-        ffn_norm    = get_offloaded(layer.ffn_norm);
-        ffn_up      = get_offloaded(layer.ffn_up);
-        ffn_gate    = get_offloaded(layer.ffn_gate);
-        ffn_down    = get_offloaded(layer.ffn_down);
+        attn_norm       = get_offloaded(layer.attn_norm);
+        wq              = get_offloaded(layer.wq);
+        wk              = get_offloaded(layer.wk);
+        wv              = get_offloaded(layer.wv);
+        attn_q_norm     = get_offloaded(layer.attn_q_norm);
+        attn_k_norm     = get_offloaded(layer.attn_k_norm);
+        wo              = get_offloaded(layer.wo);
+        bo              = get_offloaded(layer.bo);
+        ffn_norm        = get_offloaded(layer.ffn_norm);
+        ffn_gate_inp    = get_offloaded(layer.ffn_gate_inp);
+        ffn_up_exps     = get_offloaded(layer.ffn_up_exps);
+        ffn_gate_exps   = get_offloaded(layer.ffn_gate_exps);
+        ffn_down_exps   = get_offloaded(layer.ffn_down_exps);
 
         ggml_tensor * inpSA = inpL;
 
@@ -93,7 +96,7 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
                 LLM_NORM_RMS, il);
         cb(cur, "attn_norm", il);
 
-        // self-attention
+        // self_attention
         {
             // compute Q and K and RoPE them
             ggml_tensor * Qcur = build_lora_mm(wq, cur);
@@ -142,19 +145,26 @@ llm_build_qwen3_pipo::llm_build_qwen3_pipo(const llama_model & model, const llm_
         ggml_tensor * ffn_inp = ggml_add(ctx0, cur, inpSA);
         cb(ffn_inp, "ffn_inp", il);
 
-        // feed-forward network
+        // MoE branch
         cur = build_norm(ffn_inp,
                 ffn_norm, NULL,
                 LLM_NORM_RMS, il);
         cb(cur, "ffn_norm", il);
 
-        cur = build_ffn(cur,
-                ffn_up,   NULL, NULL,
-                ffn_gate, NULL, NULL,
-                ffn_down, NULL, NULL,
-                NULL,
-                LLM_FFN_SILU, LLM_FFN_PAR, il);
-        cb(cur, "ffn_out", il);
+        ggml_tensor * moe_out =
+            build_moe_ffn(cur,
+                    ffn_gate_inp,
+                    ffn_up_exps,
+                    ffn_gate_exps,
+                    ffn_down_exps,
+                    nullptr,
+                    n_expert, n_expert_used,
+                    LLM_FFN_SILU, true,
+                    false, 0.0,
+                    LLAMA_EXPERT_GATING_FUNC_TYPE_SOFTMAX,
+                    il);
+        cb(moe_out, "ffn_moe_out", il);
+        cur = moe_out;
 
         cur = ggml_add(ctx0, cur, ffn_inp);
 

@@ -8965,7 +8965,12 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
-                llm = std::make_unique<llm_build_qwen3moe>(*this, params);
+                if(this->params.enable_pipo){
+                    llm = std::make_unique<llm_build_qwen3moe_pipo>(*this, params);
+                }
+                else{
+                    llm = std::make_unique<llm_build_qwen3moe>(*this, params);
+                }
             } break;
         case LLM_ARCH_QWEN3VL:
             {
