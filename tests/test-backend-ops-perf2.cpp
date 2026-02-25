@@ -325,6 +325,9 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     }
     memcpy(result->op_params, op.op_param_bytes.data(), op.op_param_bytes.size());
 
+    struct ggml_cgraph * gf = ggml_new_graph(ctx);
+    ggml_build_forward_expand(gf, result);
+
     if (!ggml_backend_supports_op(backend, result)) {
         cerr << "op " << op.short_desc() << " not supported by backend " << ggml_backend_name(backend) << '\n';
         ggml_free(ctx);
@@ -348,9 +351,6 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
             init_tensor_uniform(src_tensors.at(i));
         }
     }
-
-    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8192, false);
-    ggml_build_forward_expand(gf, result);
 
     // warmup
     ggml_status status = ggml_backend_graph_compute(backend, gf);
