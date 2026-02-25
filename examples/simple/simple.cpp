@@ -281,12 +281,16 @@ int main(int argc, char ** argv) {
                 }
             }
         }
-        // pipo_tensor_layout(overrides, cuda, cuda_host);
+        #if 0
+        pipo_tensor_layout(overrides, cuda, cuda_host);
+        #else
         for (auto& override : overrides_list){
             overrides.push_back({override.c_str(), cuda_host});
         }
         overrides.push_back({".*", cuda});
         overrides.push_back({nullptr, nullptr});
+        #endif
+
         model_params.tensor_buft_overrides = overrides.data();
     }
 
@@ -313,7 +317,9 @@ int main(int argc, char ** argv) {
     // pre-assign op_offload
     std::vector<const char*> p_offload, d_offload;
     if(enable_pipo){
-        // pipo_assign_offload(p_offload, d_offload);
+        #if 0
+        pipo_assign_offload(p_offload, d_offload);
+        #else
         for (auto & offload : decode_offloads_list){
             d_offload.push_back(offload.c_str());
         }
@@ -321,6 +327,7 @@ int main(int argc, char ** argv) {
         for (auto& override: overrides_list){
             p_offload.push_back(override.c_str());
         }
+        #endif
         llama_model_set_offload(model, p_offload.data(), d_offload.data(), p_offload.size(), d_offload.size());
     }
 
@@ -334,7 +341,7 @@ int main(int argc, char ** argv) {
     // enable performance counters
     ctx_params.no_perf = false;
 
-    // if(enable_pipo) ctx_params.op_offload = false;
+    if(enable_pipo) ctx_params.op_offload = false;
 
     ctx_params.enable_pipo = enable_pipo;
     // ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
@@ -404,7 +411,6 @@ int main(int argc, char ** argv) {
             fprintf(stderr, "%s : failed to eval, return code %d\n", __func__, 1);
             return 1;
         }
-
         n_pos += batch.n_tokens;
 
         // sample the next token
