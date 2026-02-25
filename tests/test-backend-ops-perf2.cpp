@@ -353,26 +353,9 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     }
 
     // warmup
-    ggml_status status = ggml_backend_graph_compute(backend, gf);
-    if (status != GGML_STATUS_SUCCESS) {
-        fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
-        return -1;
-    }
-    // duplicate the op
-    int  n_runs;
-    bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
-    if (is_cpu) {
-        n_runs = 20;
-    } else if (op.op_type == GGML_OP_MUL_MAT){
-        n_runs = 200;
-    }
-    else{
-        n_iter = 500000;
-        n_runs = 5000;
-    }
-    for (int i = 1; i < n_runs; i++) {
-        ggml_graph_add_node(gf, result);
-    }
+    ggml_backend_graph_compute(backend, gf);
+    ggml_backend_synchronize(backend);
+
     // 6. 执行计算图
     n_iter                  = n_iter / n_runs;
     int64_t t_compute_start = ggml_time_us();
