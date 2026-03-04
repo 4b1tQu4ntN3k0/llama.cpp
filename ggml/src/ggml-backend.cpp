@@ -2200,9 +2200,15 @@ void ggml_backend_sched_reset(ggml_backend_sched_t sched) {
 
 static void pipo_alloc_dynamic_tensors(ggml_backend_sched_t sched){
     sched->pipo_buf = ggml_backend_alloc_ctx_tensors(sched->pipo_ctx, sched->backends[0]);
-    ggml_backend_buffer_set_usage(sched->pipo_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
-    GGML_LOG_INFO("%s: %12s dynamic buffer size = %8.2f MiB\n",__func__,
+    if(sched->pipo_buf) {
+        ggml_backend_buffer_set_usage(sched->pipo_buf, GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+        GGML_LOG_INFO("%s: %12s dynamic buffer size = %8.2f MiB\n",__func__,
                  ggml_backend_buffer_name(sched->pipo_buf), ggml_backend_buffer_get_size(sched->pipo_buf) / 1024.0 / 1024.0);
+    }
+    else {
+        GGML_LOG_INFO("no need to alloc dynamic buffer size = 0 MiB\n");
+    }
+    
 }
 
 void ggml_backend_sched_reserve_size(ggml_backend_sched_t sched, struct ggml_cgraph * measure_graph, size_t * sizes) {
