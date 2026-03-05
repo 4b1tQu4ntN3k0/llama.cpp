@@ -4560,7 +4560,9 @@ static void ggml_backend_cuda_record_async_set(ggml_backend_t backend, ggml_back
 
     CUDA_CHECK(cudaMemcpyAsync((char *)tensor->data + offset, data, size, cudaMemcpyHostToDevice, cuda_ctx->trans_stream()));
 
-    CUDA_CHECK(cudaEventRecord((cudaEvent_t)event->context, cuda_ctx->trans_stream()));
+    if(event){
+        CUDA_CHECK(cudaEventRecord((cudaEvent_t)event->context, cuda_ctx->trans_stream()));
+    }
 }
 
 static void ggml_backend_cuda_wait_async_set(ggml_backend_t backend, ggml_backend_event_t event) {

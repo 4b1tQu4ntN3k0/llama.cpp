@@ -20,3 +20,7 @@
     a. build_gf: use dynamic tensors for offload tensors in gf
     b. split: based on pre-assign / force split on dynamic tensors
 6. decode
+
+
+
+dynamic tensor的内存申请修改为reserve的逻辑，不在decode阶段申请空间
