@@ -483,6 +483,9 @@ static void ggml_backend_graph_optimize(ggml_backend_t backend, struct ggml_cgra
 }
 
 void ggml_backend_record_async_set(ggml_backend_t backend, ggml_backend_event_t event, struct ggml_tensor * tensor, const void * data, size_t offset, size_t size) {
+    if(size == 0){
+        return;
+    }
     GGML_ASSERT(backend);
     GGML_ASSERT(backend->iface.record_async_set != NULL);
     GGML_ASSERT(tensor);
@@ -720,6 +723,7 @@ struct ggml_backend_sched_split {
     // pipo dynamic tensor list
     struct dynamic_copy_info dynamic_cpy_list[5];
     int info_cnt;
+    bool has_top_k;
 };
 
 struct ggml_backend_sched {
@@ -1288,6 +1292,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         split->i_start = 0;
         split->n_inputs = 0;
         split->info_cnt = 0;
+        split->has_top_k = false;
         int cur_backend_id = split->backend_id;
         for (; i < graph->n_nodes; i++) {
             struct ggml_tensor * node = graph->nodes[i];
@@ -1350,7 +1355,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                 split->i_start = i;
                 split->n_inputs = 0;
                 split->info_cnt = 0;
+                split->has_top_k = false;
                 cur_backend_id = node_backend_id;
+            }
+
+            if(sched->enable_pipo && node->op == GGML_OP_ARGSORT) {
+                split->has_top_k = true;
             }
 
             // find inputs that are not on the same backend
@@ -1665,7 +1675,7 @@ static enum ggml_status copy_dynamic_tensor_next(ggml_backend_sched_t sched, str
     // copy the input tensors to the split backend
     
     for(int info_id = 0; info_id < split->info_cnt; info_id++){
-        
+        // GGML_LOG_DEBUG("\tinfo_id %d\n", info_id);
         struct dynamic_copy_info* info = &split->dynamic_cpy_list[info_id];
         std::string name = info->dst_tensor->name;
         assert(ggml_backend_is_cuda(split_backend));
@@ -1676,6 +1686,9 @@ static enum ggml_status copy_dynamic_tensor_next(ggml_backend_sched_t sched, str
             assert(info->ids_tensor);
             if(ids_tensor != info->ids_tensor){
                 ids_tensor = info->ids_tensor;
+                if(ggml_nbytes(ids_tensor)==0) {
+                    continue;
+                }
                 ids.resize(ggml_nbytes(ids_tensor) / sizeof(int32_t));
                 auto ids_backend = ggml_backend_sched_get_tensor_backend(sched, ids_tensor);
                 ggml_backend_tensor_get_async(ids_backend, ids_tensor, ids.data(), 0, ggml_nbytes(ids_tensor));
@@ -1972,6 +1985,7 @@ static enum ggml_status ggml_backend_sched_compute_splits_async_pipo(ggml_backen
         // printf("\n\t%d split compute: %.3f ms\n", split_id, duration_ms);
 
         // copy_dynamic_tensor_next(sched, split, dynamic_tensor_ids, dynamic_tensor_list, dynamic_tensor_cpy_events);
+        // GGML_LOG_DEBUG("copy_dynamic_tensor_next: split %d\n", split_id);
         copy_dynamic_tensor_next(sched, split, dynamic_tensor_cpy_events);
     }
     return ret;
@@ -2938,20 +2952,21 @@ void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, const ch
         dynamic_copy_info* info = nullptr;
         if(is_moe_weight_tensor(name)){
             // after top_k computed
-            for(int j = id_list[i]; j>=0; j--){
+            for(int j = id_list[i]-1; j>=0; j--){
                 struct ggml_backend_sched_split * split = &splits[j];
-                if(is_moe_weight_tensor(split->graph.nodes[0]->name)){
+                if(!split->has_top_k){
                     continue;
                 }
-                for(int node_id = 0; node_id < split->graph.n_nodes; node_id++){
-                    if(split->graph.nodes[node_id]->op==GGML_OP_ARGSORT){
-                        info = &split->dynamic_cpy_list[split->info_cnt++];
-                        break;
-                    }
-                }
-                if(info == nullptr){
-                    assert(false);
-                }
+                info = &split->dynamic_cpy_list[split->info_cnt++];
+                // for(int node_id = 0; node_id < split->graph.n_nodes; node_id++){
+                //     if(split->graph.nodes[node_id]->op==GGML_OP_ARGSORT){
+                //         info = &split->dynamic_cpy_list[split->info_cnt++];
+                //         break;
+                //     }
+                // }
+                // if(info == nullptr){
+                //     assert(false);
+                // }
                 GGML_LOG_INFO("split %d add dyn_cpy_tensor: %s\n", j, src_tensors[i]->name);
                 break;
             }
