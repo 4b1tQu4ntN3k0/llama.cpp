@@ -1,11 +1,11 @@
 {
     "offloads": [
-        "blk\\.([1-4][0-9])\\.ffn_down_exps\\.weight"
+        "blk\\.([8-9]|[1-4][0-9])\\.ffn_down_exps\\.weight"
     ],
     "overrides": [
         "^token_embd\\.weight$",
-        "blk\\.([1-4][0-9])\\.ffn_gate_exps\\.weight",
-        "blk\\.([1-4][0-9])\\.ffn_down_exps\\.weight",
-        "blk\\.([1-4][0-9])\\.ffn_up_exps\\.weight"
+        "blk\\.([8-9]|[1-4][0-9])\\.ffn_gate_exps\\.weight",
+        "blk\\.([8-9]|[1-4][0-9])\\.ffn_down_exps\\.weight",
+        "blk\\.([8-9]|[1-4][0-9])\\.ffn_up_exps\\.weight"
     ]
 }
