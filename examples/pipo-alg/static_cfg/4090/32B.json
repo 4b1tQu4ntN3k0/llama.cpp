@@ -2,5 +2,6 @@
     "offloads": [
     ],
     "overrides": [
+        "^token_embd\\.weight$"
     ]
 }
