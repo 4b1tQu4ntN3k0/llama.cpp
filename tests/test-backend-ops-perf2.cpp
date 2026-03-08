@@ -325,9 +325,6 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     }
     memcpy(result->op_params, op.op_param_bytes.data(), op.op_param_bytes.size());
 
-    struct ggml_cgraph * gf = ggml_new_graph(ctx);
-    ggml_build_forward_expand(gf, result);
-
     if (!ggml_backend_supports_op(backend, result)) {
         cerr << "op " << op.short_desc() << " not supported by backend " << ggml_backend_name(backend) << '\n';
         ggml_free(ctx);
@@ -352,10 +349,30 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
         }
     }
 
-    // warmup
-    ggml_backend_graph_compute(backend, gf);
-    ggml_backend_synchronize(backend);
+    struct ggml_cgraph * gf = ggml_new_graph_custom(ctx, 8192, false);
+    ggml_build_forward_expand(gf, result);
 
+    // warmup
+    ggml_status status = ggml_backend_graph_compute(backend, gf);
+    if (status != GGML_STATUS_SUCCESS) {
+        fprintf(stderr, "%s: ggml_backend_graph_compute failed. status=%s \n", __func__, ggml_status_to_string(status));
+        return -1;
+    }
+    // duplicate the op
+    int  n_runs;
+    bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    if (is_cpu) {
+        n_runs = 20;
+    } else if (op.op_type == GGML_OP_MUL_MAT){
+        n_runs = 200;
+    }
+    else{
+        n_iter = 500000;
+        n_runs = 5000;
+    }
+    for (int i = 1; i < n_runs; i++) {
+        ggml_graph_add_node(gf, result);
+    }
     // 6. 执行计算图
     n_iter                  = n_iter / n_runs;
     int64_t t_compute_start = ggml_time_us();
