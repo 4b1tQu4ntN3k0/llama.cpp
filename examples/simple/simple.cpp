@@ -185,8 +185,8 @@ int main(int argc, char ** argv) {
     bool enable_pipo = false;
     // path to pipo perf file
     std::string pipo_alg_result_path;
+    int n_threads = 8;
     // parse command line arguments
-
     {
         int i = 1;
         for (; i < argc; i++) {
@@ -243,6 +243,18 @@ int main(int argc, char ** argv) {
                 }
             } else if (strcmp(argv[i], "-r") == 0) {
                 enable_random = true;
+            } else if (strcmp(argv[i], "-t") == 0) {
+                if (i + 1 < argc) {
+                    try {
+                        n_threads = std::stoi(argv[++i]);
+                    } catch (...) {
+                        print_usage(argc, argv);
+                        return 1;
+                    }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
             } else {
                 // prompt starts here
                 break;
@@ -393,10 +405,14 @@ int main(int argc, char ** argv) {
     if(enable_pipo) ctx_params.op_offload = false;
 
     ctx_params.enable_pipo = enable_pipo;
+    
+    ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads;
     // ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     // ctx_params.cb_eval = my_eval_callback;
     // ctx_params.cb_eval_user_data = NULL;
+
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
 
