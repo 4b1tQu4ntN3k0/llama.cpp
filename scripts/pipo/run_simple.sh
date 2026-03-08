@@ -13,6 +13,7 @@ N_GL="10"
 N_PREDICT="32"
 N_PROMPT=""
 RANDOM_PROMPT=""
+N_THREADS=8
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -49,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             CONFIG_PATH="$2"
             shift 2
             ;;
+        -t)
+            N_THREADS="$2"
+            shift 2
+            ;;
         *)
             # Assume it is the model path
             MODEL_PATH="$1"
@@ -66,7 +71,7 @@ if [[ ! -f "$BINARY" ]]; then
 fi
 
 # Prepare Command Arguments
-CMD_ARGS="-m $MODEL_PATH -ngl $N_GL -n $N_PREDICT"
+CMD_ARGS="-m $MODEL_PATH -ngl $N_GL -n $N_PREDICT -t $N_THREADS"
 if [[ -n "$N_PROMPT" ]]; then
     CMD_ARGS="$CMD_ARGS -p $N_PROMPT"
 fi
