@@ -424,15 +424,6 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
 
         const char * buft_name = "CPU";
-
-        // ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
-
-        // if (offload) {
-        //     auto * dev = model.dev_layer(il);
-        //     buft = ggml_backend_dev_buffer_type(dev);
-
-        //     dev_name = ggml_backend_dev_name(dev);
-        // }
         
         ggml_backend_buffer_type_t buft = mem_buft[il];
         buft_name = ggml_backend_buft_name(buft);
