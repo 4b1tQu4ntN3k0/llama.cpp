@@ -451,8 +451,9 @@ void llama_context::sched_reserve() {
             GGML_ASSERT(strncmp(n->name, LLAMA_TENSOR_NAME_FATTN "-", prefix_len) == 0);
             const int il = std::stoi(n->name + prefix_len);
             ggml_backend_dev_t device_kv;
-            if(cparams.enable_pipo) device_kv = ggml_backend_buft_get_device(model.mem_buft[il]);
-            else device_kv = model.dev_layer(il);
+            // if(cparams.enable_pipo) device_kv = ggml_backend_buft_get_device(model.mem_buft[il]);
+            // else device_kv = model.dev_layer(il);
+            device_kv = model.dev_layer(il);
             if (device_fa != device_kv && ! cparams.enable_pipo) {
                     LLAMA_LOG_WARN("%s: layer %d is assigned to device %s but the Flash Attention tensor "
                         "is assigned to device %s (usually due to missing support)\n",

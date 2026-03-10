@@ -126,10 +126,12 @@ add_library(llama
             models/qwen3.cpp
             models/qwen35.cpp
             models/qwen35moe.cpp
+            models/qwen35moe_pipo.cpp
             models/qwen3_pipo.cpp
             models/qwen3moe_pipo.cpp
             models/qwen3moe.cpp
             models/qwen3next.cpp
+            models/qwen3next_pipo.cpp
             models/qwen3vl-moe.cpp
             models/qwen3vl.cpp
             models/refact.cpp
