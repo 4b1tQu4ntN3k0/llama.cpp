@@ -590,6 +590,69 @@ private:
     const llama_model & model;
 };
 
+struct llm_build_qwen3next_pipo : public llm_build_delta_net_base {
+    llm_build_qwen3next_pipo(const llama_model & model, const llm_graph_params & params);
+private:
+    ggml_tensor * build_layer_attn(
+    llm_graph_input_attn_kv * inp_attn,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                        int   il);
+
+    ggml_tensor * build_layer_attn_linear(
+         llm_graph_input_rs * inp,
+                ggml_tensor * cur,
+                        int   il);
+
+    ggml_tensor * build_layer_ffn(
+                ggml_tensor * cur,
+                        int   il);
+
+    ggml_tensor * build_norm_gated(
+                ggml_tensor * input,
+                ggml_tensor * weights,
+                ggml_tensor * gate,
+                        int   layer);
+
+    // returns pair of qkv, z
+    std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                ggml_tensor * input,
+                        int   il);
+
+    const llama_model & model;
+
+    // Per-layer offloaded weight pointers
+    ggml_tensor * attn_norm;
+    ggml_tensor * attn_post_norm;
+    ggml_tensor * wq;
+    ggml_tensor * wk;
+    ggml_tensor * wv;
+    ggml_tensor * attn_q_norm;
+    ggml_tensor * attn_k_norm;
+    ggml_tensor * wo;
+    ggml_tensor * wqkv;
+    ggml_tensor * wqkv_gate;
+    ggml_tensor * ssm_in;
+    ggml_tensor * ssm_beta_alpha;
+    ggml_tensor * ssm_dt;
+    ggml_tensor * ssm_a;
+    ggml_tensor * ssm_conv1d;
+    ggml_tensor * ssm_norm;
+    ggml_tensor * ssm_out;
+    ggml_tensor * ffn_gate_inp;
+    ggml_tensor * ffn_up_exps;
+    ggml_tensor * ffn_gate_exps;
+    ggml_tensor * ffn_down_exps;
+    ggml_tensor * ffn_gate_up_exps;
+    ggml_tensor * ffn_up_shexp;
+    ggml_tensor * ffn_gate_shexp;
+    ggml_tensor * ffn_down_shexp;
+    ggml_tensor * ffn_gate_inp_shexp;
+    ggml_tensor * ffn_up;
+    ggml_tensor * ffn_gate;
+    ggml_tensor * ffn_down;
+};
+
 struct llm_build_qwen35 : public llm_build_delta_net_base {
     llm_build_qwen35(const llama_model & model, const llm_graph_params & params);
 private:
@@ -655,6 +718,67 @@ private:
                         int   il);
 
     const llama_model & model;
+};
+
+// TODO: derive llm_build_delta_net_base instead
+struct llm_build_qwen35moe_pipo : public llm_build_delta_net_base {
+    llm_build_qwen35moe_pipo(const llama_model & model, const llm_graph_params & params);
+private:
+    ggml_tensor * build_layer_attn(
+    llm_graph_input_attn_kv * inp_attn,
+                ggml_tensor * cur,
+                ggml_tensor * inp_pos,
+                        int * sections,
+                        int   il);
+
+    ggml_tensor * build_layer_attn_linear(
+         llm_graph_input_rs * inp,
+                ggml_tensor * cur,
+                        int   il);
+
+    ggml_tensor * build_layer_ffn(
+                ggml_tensor * cur,
+                        int   il);
+
+    ggml_tensor * build_norm_gated(
+                ggml_tensor * input,
+                ggml_tensor * weights,
+                ggml_tensor * gate,
+                        int   layer);
+
+    // returns pair of qkv, z
+    std::pair<ggml_tensor *, ggml_tensor *> build_qkvz(
+                ggml_tensor * input,
+                        int   il);
+
+    const llama_model & model;
+
+    ggml_tensor * _attn_norm;
+    ggml_tensor * _attn_post_norm;
+    ggml_tensor * _wqkv;
+    ggml_tensor * _wqkv_gate;
+    ggml_tensor * _wq;
+    ggml_tensor * _attn_q_norm;
+    ggml_tensor * _wk;
+    ggml_tensor * _wv;
+    ggml_tensor * _attn_k_norm;
+    ggml_tensor * _wo;
+    ggml_tensor * _ssm_beta;
+    ggml_tensor * _ssm_alpha;
+    ggml_tensor * _ssm_dt;
+    ggml_tensor * _ssm_a;
+    ggml_tensor * _ssm_conv1d;
+    ggml_tensor * _ssm_norm;
+    ggml_tensor * _ssm_out;
+    ggml_tensor * _ffn_gate_inp;
+    ggml_tensor * _ffn_up_exps;
+    ggml_tensor * _ffn_gate_exps;
+    ggml_tensor * _ffn_down_exps;
+    ggml_tensor * _ffn_gate_up_exps;
+    ggml_tensor * _ffn_up_shexp;
+    ggml_tensor * _ffn_gate_shexp;
+    ggml_tensor * _ffn_down_shexp;
+    ggml_tensor * _ffn_gate_inp_shexp;
 };
 
 struct llm_build_qwen : public llm_graph_context {
