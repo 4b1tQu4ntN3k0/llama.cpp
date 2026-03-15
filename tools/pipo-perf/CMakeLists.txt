@@ -1,0 +1,16 @@
+set(TARGET llama-pipo-perf)
+add_executable(${TARGET} pipo_perf.cpp)
+target_link_libraries(${TARGET} PRIVATE common llama ggml ${CMAKE_THREAD_LIBS_INIT})
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/vendor)
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/src)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+set(TARGET llama-pipo-override)
+add_executable(${TARGET} pipo_override.cpp)
+target_link_libraries(${TARGET} PRIVATE ggml)
+target_include_directories(${TARGET} PRIVATE ${PROJECT_SOURCE_DIR}/vendor)
+target_compile_features(${TARGET} PRIVATE cxx_std_17)
+
+if(LLAMA_TOOLS_INSTALL)
+    install(TARGETS llama-pipo-perf llama-pipo-override RUNTIME)
+endif()

@@ -1,0 +1,10 @@
+{
+    "offloads": [
+    ],
+    "overrides": [
+        "^token_embd\\.weight$",
+        "blk\\.([0-9]|[1-4][0-9])\\.ffn_down\\.weight",
+        "blk\\.([0-9]|[1-4][0-9])\\.ffn_gate\\.weight",
+        "blk\\.([0-9]|[1-4][0-9])\\.ffn_up\\.weight"
+    ]
+}
