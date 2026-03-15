@@ -198,32 +198,67 @@ int main(int argc, char ** argv) {
 		return 0;
 	}
 
+	const int m_total = get_gpu_budget_mib(mem_ratio);
+
 	vector<pipo_profile_entry> dp_profiles;
 	dp_profiles.reserve(profiles.size());
 	set<string> forced_cpu_names;
+	set<string> forced_gpu_names;
+	int dp_m = m_total;
 
-	for (const auto & p : profiles) {
-		if (is_forced_cpu_weight(p.weight_name)) {
-			forced_cpu_names.insert(p.weight_name);
-			continue;
+	if (is_moe) {
+		vector<pipo_profile_entry> exps_profiles, non_exps_profiles;
+		for (const auto & p : profiles) {
+			if (is_forced_cpu_weight(p.weight_name)) {
+				forced_cpu_names.insert(p.weight_name);
+				continue;
+			}
+			if (is_forced_moe_cpu_weight(p.weight_name)) {
+				exps_profiles.push_back(p);
+			} else {
+				non_exps_profiles.push_back(p);
+			}
 		}
-		if (is_moe && is_forced_moe_cpu_weight(p.weight_name)) {
-			forced_cpu_names.insert(p.weight_name);
-			continue;
+		size_t non_exps_total_mib = 0;
+		for (const auto & p : non_exps_profiles) {
+			non_exps_total_mib += p.size;
 		}
-		dp_profiles.push_back(p);
+		if ((int)non_exps_total_mib <= m_total) {
+			cerr << "MoE: non-exps total " << non_exps_total_mib << " MiB <= GPU budget " << m_total
+				 << " MiB -> forcing non-exps to GPU, running DP on exps half\n";
+			for (const auto & p : non_exps_profiles) {
+				forced_gpu_names.insert(p.weight_name);
+			}
+			dp_profiles = std::move(exps_profiles);
+			dp_m = m_total - (int)non_exps_total_mib;
+		} else {
+			cerr << "MoE: non-exps total " << non_exps_total_mib << " MiB > GPU budget " << m_total
+				 << " MiB -> forcing exps to CPU, running DP on non-exps half\n";
+			for (const auto & p : exps_profiles) {
+				forced_cpu_names.insert(p.weight_name);
+			}
+			dp_profiles = std::move(non_exps_profiles);
+		}
+	} else {
+		for (const auto & p : profiles) {
+			if (is_forced_cpu_weight(p.weight_name)) {
+				forced_cpu_names.insert(p.weight_name);
+				continue;
+			}
+			dp_profiles.push_back(p);
+		}
 	}
 
-	const int m_total = get_gpu_budget_mib(mem_ratio);
-	const int m = m_total;
 	const double neg_inf = -numeric_limits<double>::infinity();
 	cerr << "GPU budget: " << m_total << " MiB (" << mem_ratio * 100.0 << "% of current free memory), "
-		 << "forced CPU weights: " << forced_cpu_names.size() << ", DP budget: " << m << " MiB\n";
+		 << "forced CPU: " << forced_cpu_names.size() << ", forced GPU: " << forced_gpu_names.size()
+		 << ", DP budget: " << dp_m << " MiB\n";
 
 	if (dp_profiles.empty()) {
 		vector<string> override_weights;
 		override_weights.reserve(profiles.size());
 		for (const auto & p : profiles) {
+			if (forced_gpu_names.count(p.weight_name)) continue;
 			override_weights.push_back(p.weight_name);
 		}
 
@@ -231,7 +266,10 @@ int main(int argc, char ** argv) {
 		nlohmann::json overrides = nlohmann::json::array();
 		for (const string & weight_name : override_weights) {
 			int block_index = -1;
-			if (extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index) {
+			bool should_offload = is_moe
+				? weight_name.find("ffn_down_exp") != string::npos
+				: extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index;
+			if (should_offload) {
 				offloads.push_back(weight_name);
 			}
 			overrides.push_back(weight_name);
@@ -259,11 +297,11 @@ int main(int argc, char ** argv) {
 
 	const int n = dp_profiles.size();
 
-	vector<vector<double>> prev(m + 1, vector<double>(2, neg_inf));
-	vector<vector<double>> curr(m + 1, vector<double>(2, neg_inf));
-	vector<vector<array<parent_choice, 2>>> parent(n, vector<array<parent_choice, 2>>(m + 1));
+	vector<vector<double>> prev(dp_m + 1, vector<double>(2, neg_inf));
+	vector<vector<double>> curr(dp_m + 1, vector<double>(2, neg_inf));
+	vector<vector<array<parent_choice, 2>>> parent(n, vector<array<parent_choice, 2>>(dp_m + 1));
 
-	for (int j = 0; j <= m; ++j) {
+	for (int j = 0; j <= dp_m; ++j) {
 		prev[j][0] = 0.0;
 		parent[0][j][0] = { static_cast<uint16_t>(j), 0, 0 };
 		if (j >= (int) dp_profiles[0].size) {
@@ -276,7 +314,7 @@ int main(int argc, char ** argv) {
 
 	for (int i = 1; i < n; ++i) {
 		const double switch_cost = -dp_profiles[i].transfer_ms;
-		for (int j = 0; j <= m; ++j) {
+		for (int j = 0; j <= dp_m; ++j) {
 			curr[j][0] = prev[j][0];
 			curr[j][1] = prev[j][1];
 			parent[i][j][0] = { static_cast<uint16_t>(j), 0, 0 };
@@ -301,7 +339,7 @@ int main(int argc, char ** argv) {
 			}
 		}
 		swap(prev, curr);
-		for (int j = 0; j <= m; ++j) {
+		for (int j = 0; j <= dp_m; ++j) {
 			curr[j][0] = neg_inf;
 			curr[j][1] = neg_inf;
 		}
@@ -309,8 +347,8 @@ int main(int argc, char ** argv) {
 
 	
 
-	int final_state = prev[m][1] > prev[m][0] ? 1 : 0;
-	int cur_j = m;
+	int final_state = prev[dp_m][1] > prev[dp_m][0] ? 1 : 0;
+	int cur_j = dp_m;
 	vector<string> gpu_weights;
 	for (int i = n - 1; i >= 0; --i) {
 		const parent_choice choice = parent[i][cur_j][final_state];
@@ -329,8 +367,7 @@ int main(int argc, char ** argv) {
 		if (gpu_weight_set.count(profile.weight_name)) {
 			continue;
 		}
-		if (forced_cpu_names.count(profile.weight_name)) {
-			override_weights.push_back(profile.weight_name);
+		if (forced_gpu_names.count(profile.weight_name)) {
 			continue;
 		}
 		override_weights.push_back(profile.weight_name);
@@ -340,7 +377,10 @@ int main(int argc, char ** argv) {
 	nlohmann::json overrides = nlohmann::json::array();
 	for (const string & weight_name : override_weights) {
 		int block_index = -1;
-		if (extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index) {
+		bool should_offload = is_moe
+			? weight_name.find("ffn_down_exp") != string::npos
+			: extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index;
+		if (should_offload) {
 			offloads.push_back(weight_name);
 		}
 		overrides.push_back(weight_name);
@@ -363,6 +403,6 @@ int main(int argc, char ** argv) {
 	}
 
 	cerr << "perf config written to: " << output_path << '\n';
-	cerr << "scores: " << prev[m][0] << ' ' << prev[m][1] << '\n';
+	cerr << "scores: " << prev[dp_m][0] << ' ' << prev[dp_m][1] << '\n';
 	return 0;
 }
