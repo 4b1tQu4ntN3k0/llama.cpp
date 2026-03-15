@@ -268,7 +268,7 @@ int main(int argc, char ** argv) {
 	nlohmann::json overrides = nlohmann::json::array();
 	for (const string & weight_name : override_weights) {
 		int block_index = -1;
-		if (extract_block_index(weight_name, block_index) && block_index % 3 == 0) {
+		if (extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index) {
 			offloads.push_back(weight_name);
 		}
 		overrides.push_back(weight_name);

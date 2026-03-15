@@ -35,7 +35,7 @@ static constexpr int PIPO_GPU_MATMUL_RUNS = 5;
 #ifdef __EMSCRIPTEN__
 #    define N_THREADS 1
 #else
-#    define N_THREADS std::thread::hardware_concurrency()
+#    define N_THREADS 4
 #endif
 
 struct bench_result {
@@ -499,6 +499,7 @@ static void print_summary(
 int main(int argc, char ** argv) {
 	string model_path;
 	string output_path;
+	int n_threads = 4;
 
 	for (int i = 1; i < argc; ++i) {
 		const string arg = argv[i];
@@ -506,6 +507,8 @@ int main(int argc, char ** argv) {
 			model_path = argv[++i];
 		} else if (arg == "-c" && i + 1 < argc) {
 			output_path = argv[++i];
+		} else if (arg == "-t" && i + 1 < argc) {
+			n_threads = std::stoi(argv[++i]);
 		}
 	}
 
@@ -537,6 +540,8 @@ int main(int argc, char ** argv) {
 	ctx_params.n_ctx   = 1;
 	ctx_params.n_batch = 1;
 	ctx_params.no_perf = true;
+	ctx_params.n_threads = n_threads;
+    ctx_params.n_threads_batch = n_threads;
 
 	llama_context * ctx = llama_init_from_model(model, ctx_params);
 	if (ctx == nullptr) {
