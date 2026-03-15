@@ -9,7 +9,7 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-pipo pipo_alg_config] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-pipo] [-config config.json] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
     printf("\n");
 }
 
@@ -183,8 +183,8 @@ int main(int argc, char ** argv) {
     int n_prompt_target = -1; // -1 means use prompt length, otherwise fill to this length
     bool enable_random = false;
     bool enable_pipo = false;
-    // path to pipo perf file
-    std::string pipo_alg_result_path;
+    // path to config json file
+    std::string config_path;
     int n_threads = 8;
     // parse command line arguments
     {
@@ -223,9 +223,10 @@ int main(int argc, char ** argv) {
                 }
             } else if (strcmp(argv[i], "-pipo") == 0) {
                 enable_pipo = true;
+            } else if (strcmp(argv[i], "-config") == 0) {
                 if (i + 1 < argc){
-                    pipo_alg_result_path = argv[++i];
-                }else {
+                    config_path = argv[++i];
+                } else {
                     print_usage(argc, argv);
                     return 1;
                 }
@@ -274,12 +275,20 @@ int main(int argc, char ** argv) {
     }
     // int n_cpu_layers_per_split = 0;
     std::vector<std::string> overrides_list, decode_offloads_list;
-    // load alg result
-    if (enable_pipo){
-        std::ifstream conf_file(pipo_alg_result_path, std::ios_base::in);
+    // load config
+    if (!config_path.empty()) {
+        std::ifstream conf_file(config_path, std::ios_base::in);
+        if (!conf_file.is_open()) {
+            fprintf(stderr, "%s: error: unable to open config file %s\n", __func__, config_path.c_str());
+            return 1;
+        }
         auto j = nlohmann::json::parse(conf_file);
-        overrides_list.assign(j["overrides"].begin(), j["overrides"].end());
-        decode_offloads_list.assign(j["offloads"].begin(), j["offloads"].end());
+        if (j.contains("overrides") && j["overrides"].is_array()) {
+            overrides_list.assign(j["overrides"].begin(), j["overrides"].end());
+        }
+        if (j.contains("offloads") && j["offloads"].is_array()) {
+            decode_offloads_list.assign(j["offloads"].begin(), j["offloads"].end());
+        }
     }
     // load dynamic backends
     ggml_backend_load_all();
@@ -294,33 +303,38 @@ int main(int argc, char ** argv) {
     // model_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
     // model_params.use_extra_bufts = false;
     std::vector<llama_model_tensor_buft_override> overrides;
-
     if(enable_pipo){
-        ggml_backend_buffer_type_t cuda,cuda_host;
-        for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-            auto * dev = ggml_backend_dev_get(i);
-            auto * buft = ggml_backend_dev_buffer_type(dev);
-            if (buft) {
-                auto name = ggml_backend_buft_name(buft);
-                if (strstr(name, "CUDA")){
-                    cuda = buft;
-                    cuda_host = ggml_backend_dev_host_buffer_type(dev);
-                    break;
-                }
+        assert(!overrides_list.empty());
+    }
+    ggml_backend_buffer_type_t cuda = nullptr;
+    ggml_backend_buffer_type_t cuda_host = nullptr;
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        if (buft) {
+            auto name = ggml_backend_buft_name(buft);
+            if (strstr(name, "CUDA")) {
+                cuda = buft;
+                cuda_host = ggml_backend_dev_host_buffer_type(dev);
+                break;
             }
         }
-        #if 0
-        pipo_tensor_layout(overrides, cuda, cuda_host);
-        #else
-        for (auto& override : overrides_list){
-            overrides.push_back({override.c_str(), cuda_host});
-        }
-        overrides.push_back({".*", cuda});
-        overrides.push_back({nullptr, nullptr});
-        #endif
-
-        model_params.tensor_buft_overrides = overrides.data();
     }
+
+    if (!overrides_list.empty()) {
+        if (cuda == nullptr || cuda_host == nullptr) {
+            fprintf(stderr, "%s: error: config overrides require a CUDA backend\n", __func__);
+            return 1;
+        }
+
+        for (auto & override : overrides_list) {
+            overrides.push_back({ override.c_str(), cuda_host });
+        }
+        overrides.push_back({ ".*", cuda });
+        overrides.push_back({ nullptr, nullptr });
+        model_params.tensor_buft_overrides = overrides.data();
+    } 
 
     llama_model * model = llama_model_load_from_file(model_path.c_str(), model_params);
 
@@ -377,18 +391,14 @@ int main(int argc, char ** argv) {
     // pre-assign op_offload
     std::vector<const char*> p_offload, d_offload;
     if(enable_pipo){
-        #if 0
-        pipo_assign_offload(p_offload, d_offload);
-        #else
         for (auto & offload : decode_offloads_list){
             d_offload.push_back(offload.c_str());
         }
-        // offload all
-        for (auto& override: overrides_list){
-            if(override.find("blk") != override.npos)
-            p_offload.push_back(override.c_str());
+        for (auto & override : overrides_list){
+            if (override.find("blk") != override.npos) {
+                p_offload.push_back(override.c_str());
+            }
         }
-        #endif
         llama_model_set_offload(model, p_offload.data(), d_offload.data(), p_offload.size(), d_offload.size());
     }
 
