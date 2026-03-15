@@ -62,9 +62,12 @@ fi
 MODEL_FILENAME=$(basename "$MODEL_PATH")
 MODEL_NAME="${MODEL_FILENAME%.*}"
 CURRENT_DATE=$(date +"%Y%m%d_%H%M%S")
-# Logs structure: logs/{mode}/{build_type}/
-LOG_DIR="logs/op_perf/${BUILD_TYPE}"
-LOG_FILE="${LOG_DIR}/${CURRENT_DATE}_${MODE}_${MODEL_NAME}.log"
+# Place log next to output json
+OUTPUT_DIR=$(dirname "$OUTPUT_JSON")
+OUTPUT_BASENAME=$(basename "$OUTPUT_JSON")
+OUTPUT_NAME="${OUTPUT_BASENAME%.*}"
+LOG_DIR="$OUTPUT_DIR"
+LOG_FILE="${LOG_DIR}/${CURRENT_DATE}_${MODE}_${MODEL_NAME}_${OUTPUT_NAME}.log"
 
 mkdir -p "$LOG_DIR"
 

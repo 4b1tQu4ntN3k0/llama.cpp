@@ -79,7 +79,10 @@ if [[ -n "$RANDOM_PROMPT" ]]; then
     CMD_ARGS="$CMD_ARGS $RANDOM_PROMPT"
 fi
 if [[ "$MODE" == "pipo" ]]; then
-    CMD_ARGS="$CMD_ARGS -pipo $CONFIG_PATH"
+    CMD_ARGS="$CMD_ARGS -pipo"
+fi
+if [[ -n "$CONFIG_PATH" ]]; then
+    CMD_ARGS="$CMD_ARGS -config $CONFIG_PATH"
 fi
 
 # Prepare Log Directory and File

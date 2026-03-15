@@ -2,7 +2,9 @@
 #include "pipo_op_perf.h"
 
 #include <iostream>
+#include <iomanip>
 #include <nlohmann/json.hpp>
+#include <set>
 #include <string>
 #include <vector>
 using namespace std;
@@ -298,6 +300,64 @@ struct SingleTestResult {
     double                 compute_ms;
 };
 
+static void print_perf_summary(const unordered_map<string, unordered_map<string, double>> & op_perf_results,
+                               const unordered_map<string, string> & op_labels,
+                               double h2d_bandwidth) {
+    cerr << "\n==== Performance Summary ====\n";
+
+    set<string> backend_names;
+    set<string> op_keys;
+    for (const auto & backend_entry : op_perf_results) {
+        backend_names.insert(backend_entry.first);
+        for (const auto & op_entry : backend_entry.second) {
+            op_keys.insert(op_entry.first);
+        }
+    }
+
+    cerr << left << setw(40) << "op" << left << setw(36) << "shape";
+    for (const auto & backend_name : backend_names) {
+        cerr << right << setw(16) << (backend_name + " (ms)");
+    }
+    cerr << '\n';
+
+    cerr << string(76 + 16 * backend_names.size(), '-') << '\n';
+
+    for (const auto & op_key : op_keys) {
+        string label = op_key;
+        auto label_it = op_labels.find(op_key);
+        if (label_it != op_labels.end()) {
+            label = label_it->second;
+        }
+
+        string op_name = label;
+        string op_shape;
+        size_t split = label.find(':');
+        if (split != string::npos) {
+            op_name = label.substr(0, split);
+            op_shape = label.substr(split + 1);
+        }
+
+        cerr << left << setw(40) << op_name << left << setw(36) << op_shape;
+        for (const auto & backend_name : backend_names) {
+            auto backend_it = op_perf_results.find(backend_name);
+            if (backend_it != op_perf_results.end()) {
+                auto op_it = backend_it->second.find(op_key);
+                if (op_it != backend_it->second.end() && op_it->second >= 0.0) {
+                    cerr << right << setw(16) << fixed << setprecision(3) << op_it->second;
+                } else {
+                    cerr << right << setw(16) << "N/A";
+                }
+            } else {
+                cerr << right << setw(16) << "N/A";
+            }
+        }
+        cerr << '\n';
+    }
+
+    cerr << "\nH2D bandwidth: " << fixed << setprecision(2) << h2d_bandwidth / (1024.0 * 1024.0) << " MiB/ms"
+         << " (" << h2d_bandwidth * 1000.0 / (1024.0 * 1024.0 * 1024.0) << " GiB/s)\n";
+}
+
 static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend, int n_iter) {
     ggml_init_params    init_params = {
         /* .mem_size = */ ggml_tensor_overhead() * 128 + ggml_graph_overhead_custom(8192, false),
@@ -362,13 +422,13 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     int  n_runs;
     bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
     if (is_cpu) {
-        n_runs = 20;
+        n_runs = 5;
     } else if (op.op_type == GGML_OP_MUL_MAT){
-        n_runs = 200;
+        n_runs = 10;
     }
     else{
-        n_iter = 500000;
-        n_runs = 5000;
+        // n_iter = 10;
+        n_runs = 10;
     }
     for (int i = 1; i < n_runs; i++) {
         ggml_graph_add_node(gf, result);
@@ -449,6 +509,7 @@ int main(int argc, char ** argv) {
     }
     auto &                                               ops = unique_ops;
     unordered_map<string, unordered_map<string, double>> op_perf_results;
+    unordered_map<string, string>                        op_labels;
     const char *                                         cpu_backend_name = ggml_backend_name(cpu_backend);
     op_perf_results[cpu_backend_name]                                     = unordered_map<string, double>();
 
@@ -457,10 +518,11 @@ int main(int argc, char ** argv) {
 
     for (auto & op : ops) {
         cerr << "perf op: " << op.short_desc() << '\n' << "key = " << op.op_key() << "\n\n";
+        op_labels[op.op_key()] = op.short_desc();
         op_perf_results[cpu_backend_name][op.op_key()] = run_single_bench(op, cpu_backend, 20);
         fprintf(stderr, "%s # %lf\n", cpu_backend_name, op_perf_results[cpu_backend_name][op.op_key()]);
 
-        op_perf_results[gpu_backend_name][op.op_key()] = run_single_bench(op, gpu_backend, 2000);
+        op_perf_results[gpu_backend_name][op.op_key()] = run_single_bench(op, gpu_backend, 40);
         fprintf(stderr, "%s # %lf\n\n", gpu_backend_name, op_perf_results[gpu_backend_name][op.op_key()]);
     }
     // test cpu -> gpu bandwidth
@@ -497,6 +559,8 @@ int main(int argc, char ** argv) {
     nlohmann::json result;
     result["op_perf_result"] = op_perf_results;
     result["h2d_bandwidth"]  = h2d_bandwidth;
-    cout << result.dump(4);
+
+    print_perf_summary(op_perf_results, op_labels, h2d_bandwidth);
+    cout << result.dump(4) << '\n';
     return 0;
 }
