@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <set>
 #include <regex>
 #include <string>
 #include <vector>
@@ -65,16 +66,16 @@ static vector<pipo_profile_entry> load_pipo_profile(const string & json_path) {
 	vector<pipo_profile_entry> profiles;
 	profiles.reserve(root.size());
 	for (const auto & item : root) {
-        auto p = parse_profile_entry(item);
-        if(p.size<1) continue;
-		profiles.push_back(parse_profile_entry(item));
+		auto p = parse_profile_entry(item);
+		if (p.size < 1) continue;
+		profiles.push_back(std::move(p));
 	}
 
 	return profiles;
 }
 
 static void print_usage(const char * argv0) {
-	cerr << "Usage: " << argv0 << " <pipo_profile.json> -c <output-dir> [-r <mem-ratio>]\n";
+	cerr << "Usage: " << argv0 << " <pipo_profile.json> -c <output-dir> [-r <mem-ratio>] [--moe]\n";
 }
 
 static int get_gpu_budget_mib(double mem_ratio) {
@@ -134,16 +135,28 @@ static bool extract_block_index(const string & weight_name, int & block_index) {
 	return true;
 }
 
+static bool is_forced_cpu_weight(const string & weight_name) {
+	return weight_name == "token_embd.weight";
+}
+
+static bool is_forced_moe_cpu_weight(const string & weight_name) {
+	static const regex moe_exps_regex(R"(ffn_.*_exps)");
+	return regex_search(weight_name, moe_exps_regex);
+}
+
 int main(int argc, char ** argv) {
 	string profile_path;
 	string output_dir;
 	double mem_ratio = 0.7;
+	bool is_moe = false;
 	for (int i = 1; i < argc; ++i) {
 		const string arg = argv[i];
 		if (arg == "-c" && i + 1 < argc) {
 			output_dir = argv[++i];
 		} else if ((arg == "-r" || arg == "--mem-ratio") && i + 1 < argc) {
 			mem_ratio = stod(argv[++i]);
+		} else if (arg == "--moe" || arg == "-moe") {
+			is_moe = true;
 		} else if (profile_path.empty()) {
 			profile_path = arg;
 		}
@@ -185,10 +198,66 @@ int main(int argc, char ** argv) {
 		return 0;
 	}
 
-	const int n = profiles.size();
-	const int m = get_gpu_budget_mib(mem_ratio);
+	vector<pipo_profile_entry> dp_profiles;
+	dp_profiles.reserve(profiles.size());
+	set<string> forced_cpu_names;
+
+	for (const auto & p : profiles) {
+		if (is_forced_cpu_weight(p.weight_name)) {
+			forced_cpu_names.insert(p.weight_name);
+			continue;
+		}
+		if (is_moe && is_forced_moe_cpu_weight(p.weight_name)) {
+			forced_cpu_names.insert(p.weight_name);
+			continue;
+		}
+		dp_profiles.push_back(p);
+	}
+
+	const int m_total = get_gpu_budget_mib(mem_ratio);
+	const int m = m_total;
 	const double neg_inf = -numeric_limits<double>::infinity();
-	cerr << "GPU budget: " << m << " MiB (" << mem_ratio * 100.0 << "% of current free memory)\n";
+	cerr << "GPU budget: " << m_total << " MiB (" << mem_ratio * 100.0 << "% of current free memory), "
+		 << "forced CPU weights: " << forced_cpu_names.size() << ", DP budget: " << m << " MiB\n";
+
+	if (dp_profiles.empty()) {
+		vector<string> override_weights;
+		override_weights.reserve(profiles.size());
+		for (const auto & p : profiles) {
+			override_weights.push_back(p.weight_name);
+		}
+
+		nlohmann::json offloads = nlohmann::json::array();
+		nlohmann::json overrides = nlohmann::json::array();
+		for (const string & weight_name : override_weights) {
+			int block_index = -1;
+			if (extract_block_index(weight_name, block_index) && block_index % 3 == 0 && block_index) {
+				offloads.push_back(weight_name);
+			}
+			overrides.push_back(weight_name);
+		}
+
+		nlohmann::json result = {
+			{ "offloads", offloads },
+			{ "overrides", overrides },
+		};
+
+		ofstream ofs(output_path);
+		if (!ofs) {
+			cerr << "error: failed to open output file: " << output_path << '\n';
+			return 1;
+		}
+		ofs << result.dump(2) << '\n';
+		if (!ofs) {
+			cerr << "error: failed to write output file: " << output_path << '\n';
+			return 1;
+		}
+		cerr << "perf config written to: " << output_path << '\n';
+		cerr << "scores: 0 0\n";
+		return 0;
+	}
+
+	const int n = dp_profiles.size();
 
 	vector<vector<double>> prev(m + 1, vector<double>(2, neg_inf));
 	vector<vector<double>> curr(m + 1, vector<double>(2, neg_inf));
@@ -197,16 +266,16 @@ int main(int argc, char ** argv) {
 	for (int j = 0; j <= m; ++j) {
 		prev[j][0] = 0.0;
 		parent[0][j][0] = { static_cast<uint16_t>(j), 0, 0 };
-		if (j >= (int) profiles[0].size) {
-			prev[j][1] = max(0.0, profiles[0].cpu_time - profiles[0].gpu_time - profiles[0].transfer_ms);
-			parent[0][j][1] = { static_cast<uint16_t>(j - (int) profiles[0].size), 0, 1 };
+		if (j >= (int) dp_profiles[0].size) {
+			prev[j][1] = max(0.0, dp_profiles[0].cpu_time - dp_profiles[0].gpu_time - dp_profiles[0].transfer_ms);
+			parent[0][j][1] = { static_cast<uint16_t>(j - (int) dp_profiles[0].size), 0, 1 };
 		} else {
 			parent[0][j][1] = { static_cast<uint16_t>(j), 1, 0 };
 		}
 	}
 
 	for (int i = 1; i < n; ++i) {
-		const double switch_cost = -profiles[i].transfer_ms;
+		const double switch_cost = -dp_profiles[i].transfer_ms;
 		for (int j = 0; j <= m; ++j) {
 			curr[j][0] = prev[j][0];
 			curr[j][1] = prev[j][1];
@@ -218,9 +287,9 @@ int main(int argc, char ** argv) {
 				parent[i][j][0] = { static_cast<uint16_t>(j), 1, 0 };
 			}
 
-			if (j >= (int) profiles[i].size) {
-				const int prev_j = j - (int) profiles[i].size;
-				const double gain = profiles[i].cpu_time - profiles[i].gpu_time;
+			if (j >= (int) dp_profiles[i].size) {
+				const int prev_j = j - (int) dp_profiles[i].size;
+				const double gain = dp_profiles[i].cpu_time - dp_profiles[i].gpu_time;
 				if (prev[prev_j][1] + gain > curr[j][1]) {
 					curr[j][1] = prev[prev_j][1] + gain;
 					parent[i][j][1] = { static_cast<uint16_t>(prev_j), 1, 1 };
@@ -246,19 +315,22 @@ int main(int argc, char ** argv) {
 	for (int i = n - 1; i >= 0; --i) {
 		const parent_choice choice = parent[i][cur_j][final_state];
 		if (choice.take_gpu) {
-			gpu_weights.push_back(profiles[i].weight_name);
+			gpu_weights.push_back(dp_profiles[i].weight_name);
 		}
 		cur_j = choice.prev_j;
 		final_state = choice.prev_state;
 	}
 	reverse(gpu_weights.begin(), gpu_weights.end());
+	set<string> gpu_weight_set(gpu_weights.begin(), gpu_weights.end());
 
 	vector<string> override_weights;
 	override_weights.reserve(profiles.size());
-	size_t gpu_index = 0;
 	for (const auto & profile : profiles) {
-		if (gpu_index < gpu_weights.size() && profile.weight_name == gpu_weights[gpu_index]) {
-			++gpu_index;
+		if (gpu_weight_set.count(profile.weight_name)) {
+			continue;
+		}
+		if (forced_cpu_names.count(profile.weight_name)) {
+			override_weights.push_back(profile.weight_name);
 			continue;
 		}
 		override_weights.push_back(profile.weight_name);
@@ -272,7 +344,6 @@ int main(int argc, char ** argv) {
 			offloads.push_back(weight_name);
 		}
 		overrides.push_back(weight_name);
-		
 	}
 
 	nlohmann::json result = {
