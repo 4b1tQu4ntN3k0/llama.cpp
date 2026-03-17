@@ -15,6 +15,7 @@ N_PROMPT=""
 RANDOM_PROMPT=""
 N_THREADS=8
 N_UBATCH="2048"
+N_DO="1"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -59,6 +60,10 @@ while [[ $# -gt 0 ]]; do
             N_UBATCH="$2"
             shift 2
             ;;
+        -do)
+            N_DO="$2"
+            shift 2
+            ;;
         *)
             # Assume it is the model path
             MODEL_PATH="$1"
@@ -91,6 +96,9 @@ if [[ -n "$CONFIG_PATH" ]]; then
 fi
 if [[ -n "$N_UBATCH" ]]; then
     CMD_ARGS="$CMD_ARGS -ubatch $N_UBATCH"
+fi
+if [[ -n "$N_DO" ]]; then
+    CMD_ARGS="$CMD_ARGS -do $N_DO"
 fi
 
 # Prepare Log Directory and File
