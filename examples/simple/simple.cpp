@@ -9,7 +9,7 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-ubatch n_ubatch] [-pipo] [-config config.json] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-ubatch n_ubatch] [-do 0|1] [-pipo] [-config config.json] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
     printf("\n");
 }
 
@@ -187,6 +187,7 @@ int main(int argc, char ** argv) {
     std::string config_path;
     int n_threads = 8;
     int n_ubatch = 512;
+    bool enable_decode_offload = true;
     // parse command line arguments
     {
         int i = 1;
@@ -265,6 +266,23 @@ int main(int argc, char ** argv) {
                             print_usage(argc, argv);
                             return 1;
                         }
+                    } catch (...) {
+                        print_usage(argc, argv);
+                        return 1;
+                    }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-do") == 0) {
+                if (i + 1 < argc) {
+                    try {
+                        const int do_value = std::stoi(argv[++i]);
+                        if (do_value != 0 && do_value != 1) {
+                            print_usage(argc, argv);
+                            return 1;
+                        }
+                        enable_decode_offload = (do_value == 1);
                     } catch (...) {
                         print_usage(argc, argv);
                         return 1;
@@ -408,8 +426,10 @@ int main(int argc, char ** argv) {
     // pre-assign op_offload
     std::vector<const char*> p_offload, d_offload;
     if(enable_pipo){
-        for (auto & offload : decode_offloads_list){
-            d_offload.push_back(offload.c_str());
+        if(enable_decode_offload){
+            for (auto & offload : decode_offloads_list){
+                d_offload.push_back(offload.c_str());
+            }
         }
         for (auto & override : overrides_list){
             if (override.find("blk") != override.npos) {
