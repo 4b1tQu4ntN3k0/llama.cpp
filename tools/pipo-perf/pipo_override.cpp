@@ -140,7 +140,7 @@ static bool is_forced_cpu_weight(const string & weight_name) {
 }
 
 static bool is_forced_moe_cpu_weight(const string & weight_name) {
-	if (weight_name.find("_shexp") != string::npos) return false;
+	// if (weight_name.find("_shexp") != string::npos) return false;
 	static const regex moe_exps_regex(R"(ffn_.*_exps)");
 	return regex_search(weight_name, moe_exps_regex);
 }
