@@ -9,7 +9,7 @@
 
 static void print_usage(int, char ** argv) {
     printf("\nexample usage:\n");
-    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-pipo] [-config config.json] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
+    printf("\n    %s -m model.gguf [-n n_predict] [-ngl n_gpu_layers] [-ubatch n_ubatch] [-pipo] [-config config.json] [-p n_prompt] [-r random] [prompt]\n", argv[0]);
     printf("\n");
 }
 
@@ -186,6 +186,7 @@ int main(int argc, char ** argv) {
     // path to config json file
     std::string config_path;
     int n_threads = 8;
+    int n_ubatch = 512;
     // parse command line arguments
     {
         int i = 1;
@@ -248,6 +249,22 @@ int main(int argc, char ** argv) {
                 if (i + 1 < argc) {
                     try {
                         n_threads = std::stoi(argv[++i]);
+                    } catch (...) {
+                        print_usage(argc, argv);
+                        return 1;
+                    }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-ubatch") == 0) {
+                if (i + 1 < argc) {
+                    try {
+                        n_ubatch = std::stoi(argv[++i]);
+                        if (n_ubatch <= 0) {
+                            print_usage(argc, argv);
+                            return 1;
+                        }
                     } catch (...) {
                         print_usage(argc, argv);
                         return 1;
@@ -418,6 +435,7 @@ int main(int argc, char ** argv) {
     
     ctx_params.n_threads = n_threads;
     ctx_params.n_threads_batch = n_threads;
+    ctx_params.n_ubatch = std::min(n_ubatch, n_prompt);
     // ctx_params.n_cpu_layers_per_split = n_cpu_layers_per_split;
 
     // ctx_params.cb_eval = my_eval_callback;
