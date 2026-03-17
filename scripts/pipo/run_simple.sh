@@ -14,6 +14,7 @@ N_PREDICT="32"
 N_PROMPT=""
 RANDOM_PROMPT=""
 N_THREADS=8
+N_UBATCH="2048"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -54,6 +55,10 @@ while [[ $# -gt 0 ]]; do
             N_THREADS="$2"
             shift 2
             ;;
+        -ubatch)
+            N_UBATCH="$2"
+            shift 2
+            ;;
         *)
             # Assume it is the model path
             MODEL_PATH="$1"
@@ -83,6 +88,9 @@ if [[ "$MODE" == "pipo" ]]; then
 fi
 if [[ -n "$CONFIG_PATH" ]]; then
     CMD_ARGS="$CMD_ARGS -config $CONFIG_PATH"
+fi
+if [[ -n "$N_UBATCH" ]]; then
+    CMD_ARGS="$CMD_ARGS -ubatch $N_UBATCH"
 fi
 
 # Prepare Log Directory and File
