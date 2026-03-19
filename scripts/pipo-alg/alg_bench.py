@@ -110,19 +110,19 @@ n_runs = 5
 # map from alg to alg-no
 alg_map = {
     "dp": 0,
-    "pf": 1,
+    # "pf": 1,
     "static": 2
 ,
     "dp-2": 3,
-    "dp-3":4,
+    # "dp-3":4,
 }
 test_cases = [
     BenchConfig(99, 32, 6500, MODEL_QWEN_14B_Q4),
-    BenchConfig(99, 32, 4000, MODEL_QWEN_14B_Q4),
-    BenchConfig(412, 100, 6500, MODEL_QWEN_14B_Q4),
-    BenchConfig(4000, 96, 5500, MODEL_QWEN_14B_Q4),
-    BenchConfig(99, 32, 6000, MODEL_QWEN_MOE_30B_Q4),
-    BenchConfig(4000, 96, 5500, MODEL_QWEN_MOE_30B_Q4)
+    # BenchConfig(99, 32, 4000, MODEL_QWEN_14B_Q4),
+    # BenchConfig(412, 100, 6500, MODEL_QWEN_14B_Q4),
+    # BenchConfig(4000, 96, 5500, MODEL_QWEN_14B_Q4),
+    # BenchConfig(99, 32, 6000, MODEL_QWEN_MOE_30B_Q4),
+    # BenchConfig(4000, 96, 5500, MODEL_QWEN_MOE_30B_Q4)
 ]
 # map from (model, mem_usage) to ngl
 base_map = {
