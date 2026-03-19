@@ -75,7 +75,8 @@ static vector<pipo_profile_entry> load_pipo_profile(const string & json_path) {
 }
 
 static void print_usage(const char * argv0) {
-	cerr << "Usage: " << argv0 << " <pipo_profile.json> -c <output-dir> [-r <mem-ratio>] [--moe]\n";
+	cerr << "Usage: " << argv0 << " [pipo_profile.json] [-c <output-dir>] [-r <mem-ratio>] [--moe]\n";
+	cerr << "Defaults: profile=examples/pipo-alg/alg_cfg/pipo_profile.json, output=examples/pipo-alg/alg_cfg\n";
 }
 
 static int get_gpu_budget_mib(double mem_ratio) {
@@ -146,8 +147,8 @@ static bool is_forced_moe_cpu_weight(const string & weight_name) {
 }
 
 int main(int argc, char ** argv) {
-	string profile_path;
-	string output_dir;
+	string profile_path = "examples/pipo-alg/alg_cfg/pipo_profile.json";
+	string output_dir = "examples/pipo-alg/alg_cfg";
 	double mem_ratio = 0.7;
 	bool is_moe = false;
 	for (int i = 1; i < argc; ++i) {
