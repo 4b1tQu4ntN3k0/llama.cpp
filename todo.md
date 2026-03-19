@@ -24,3 +24,39 @@
 
 
 dynamic tensor的内存申请修改为reserve的逻辑，不在decode阶段申请空间
+- [x] 类似手动调整的算法尝试
+  - 直接从大到小排列 tensor 然后 override 特定的 tensor 效果并不好，因为没有充分利用offload。
+  - 要考虑的点诡异地多，还是先回到 dp
+  - [x] *新思路*
+    - 可以对每一次选择 tensor 反复贪心，动态更新堆。
+    - 比如目标 lambda(越大越好) = (cpu_compute_time - gpu_compute_time - transfer_bubble - idx * 1e-7) / std::pow(mem_size  / 1024 / 1024, alpha)
+    - 这里 transfer_time 是动态的，可以避免连续的tensor override
+    - idx 可以控制它优先override靠前的
+    - 填满后就都会有比较大的 transfer bubble，这时基本又扯平了。
+      - *结论* 效果并不好，这玩意参数比较玄学，而且没考虑offload时候后面已经有tensor offload 的情况 
+- [x] 为什么 output weight 没有在 prefill 时被 offload。
+  - 问题发生在 qwen3_pipo 的实现中，那里只考虑了各层 weight 的 offload，output 直接就是放在cpi上。
+  - 优先考虑 offload 的话也不会再 override output tensor 了，其实无所谓。
+
+- [] 关于 kv cache. set rows 和 flash attntion 算子不涉及别的 weight，kv cache本身被硬编码到 cuda，这俩算子会被 llama.cpp 分配到 cuda 上，这与算法的预期是不符合的。算法预期两个权重都在cpu上的话，两个权重所在算子之间的所有算子都会是在 cpu 上。现在存在 wk\wq\wk 和 attn_output.weight 在 cpu 上，但中间的 flash attn 算子不在 cpu 上而是在 gpu 上计算的情况。
+  - 一种修改方向是让算法加上这种情况，这样会比较臃肿，可能要引入更多的额外内存用于表达 dp 状态
+  - 另一个方向是更改pipo框架，把 kv cache 也纳入相似的 override 体系中。
+
+- [-] prefill 的瓶颈在于 mem 传输和计算没什么并发，dynamic tensor 的传输是 per split 的，而prefill 阶段一个 dynamic tensor 就会有一个 split。落实到 prefill 上就是 compute split-> mem cpy -> compute split -> mem cpy
+  - 这个改好了应该能大幅提升 prefill 速度
+  - *已完成*，有一定提升，但不多，因为现在的算法都是集中于decode阶段的。引入的延时大约是 100 微秒 per dynamic tensor
+
+- [x] 检查各个算子运算速度随着 batch 提升的情况，新的目标是关注 prefill 加速，现在的版本的 prefill 速度远远没有到极限。
+  - 发现通过flops估计不太行，不同量化的矩阵乘性能显著不同。
+  - *已完成*，随batch增长改变按线性估计。暂时以 batch_size = 1024 为基准。
+
+- [x] 尝试添加依据 prefill 的 override 策略
+  - 已添加，prefill 效果还可以，但提升也没有特别大，与 prefill batch size 强相关，应当存在甜点 batch size
+  - [x] 需要注意的是，当 batch size 很大的时候，llama.cpp 默认的 base 策略表现可能就已经很好，因为单个 weight 对应的中间结点计算时间会超过并发传输的时间，这时候再改变 override 策略在 prefill 阶段也没有什么提升空间。
+    - 事实上并没有，batch size 很大的时候 base 的prefill表现依旧很差。
+- [x] 有 offload 过激的神秘小bug要修一下。
+  - 在尝试 dynamic greedy的时候修过了，问题在于is_gpu写成override_set.count了。
+
+
+- 阶段性的新笔记
+  - 不 offload ffn_down 的策略一定是不够好的。它们的效果不会比静态强，因为难免多 override 了几个 tensor
