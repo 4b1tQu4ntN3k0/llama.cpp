@@ -2569,7 +2569,7 @@ struct ggml_tensor* ggml_backend_sched_get_pipo_tensor(ggml_backend_sched_t sche
     if (!sched->pipo_tensor_map.count(origin_tensor)){
         sched->pipo_tensor_map[origin_tensor] = ggml_dup_tensor(sched->pipo_ctx, origin_tensor);
         ggml_set_name(sched->pipo_tensor_map[origin_tensor], origin_tensor->name);
-        fprintf(stderr, "%s: pipo assign new dynamic weight %s\n", __func__, origin_tensor->name);
+        GGML_LOG_INFO("%s: pipo assign new dynamic weight %s\n", __func__, origin_tensor->name);
     }
     return sched->pipo_tensor_map.at(origin_tensor);
 }

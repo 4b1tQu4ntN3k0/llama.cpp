@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fstream>
 #include <iterator>
 #include <map>
 #include <numeric>
@@ -20,6 +21,8 @@
 #include <unordered_set>
 
 #include "build-info.h"
+#include <nlohmann/json.hpp>
+
 #include "common.h"
 #include "download.h"
 #include "fit.h"
@@ -350,6 +353,10 @@ struct cmd_params {
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
     std::vector<bool>                enable_pipo;
+    bool                             enable_decode_offload;
+    std::string                      config_path;
+    std::vector<std::string>         config_overrides;
+    std::vector<std::string>         config_offloads;
     ggml_numa_strategy               numa;
     int                              reps;
     ggml_sched_priority              prio;
@@ -395,6 +402,10 @@ static const cmd_params cmd_params_defaults = {
     /* fit_params_target    */ { 0 },
     /* fit_params_min_ctx   */ { 0 },
     /* enable_pipo          */ { false },
+    /* enable_decode_offload*/ true,
+    /* config_path          */ "",
+    /* config_overrides     */ {},
+    /* config_offloads      */ {},
     /* numa                 */ GGML_NUMA_STRATEGY_DISABLED,
     /* reps                 */ 5,
     /* prio                 */ GGML_SCHED_PRIO_NORMAL,
@@ -466,6 +477,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --no-host <0|1>                             (default: %s)\n", join(cmd_params_defaults.no_host, ",").c_str());
     printf("  --pipo <0|1>                              (default: %s)\n",
            join(cmd_params_defaults.enable_pipo, ",").c_str());
+        printf("  -do <0|1>                                 decode offload enabled for --pipo (default: %d)\n",
+            (int) cmd_params_defaults.enable_decode_offload);
+        printf("  -config <path>                            pipo config JSON with 'overrides' and 'offloads' arrays\n");
     printf("\n");
     printf(
         "Multiple values can be given for each parameter by separating them with ','\n"
@@ -518,6 +532,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     params.delay                = cmd_params_defaults.delay;
     params.progress             = cmd_params_defaults.progress;
     params.no_warmup            = cmd_params_defaults.no_warmup;
+    params.enable_decode_offload = cmd_params_defaults.enable_decode_offload;
+    params.config_path           = cmd_params_defaults.config_path;
+    params.config_overrides      = cmd_params_defaults.config_overrides;
+    params.config_offloads       = cmd_params_defaults.config_offloads;
 
     if (const char * env = getenv("HF_TOKEN")) {
         params.hf_token = env;
@@ -842,6 +860,23 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 auto p = string_split<bool>(argv[i], split_delim);
                 params.enable_pipo.insert(params.enable_pipo.end(), p.begin(), p.end());
+            } else if (arg == "-do") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                const int do_value = std::stoi(argv[i]);
+                if (do_value != 0 && do_value != 1) {
+                    invalid_param = true;
+                    break;
+                }
+                params.enable_decode_offload = do_value == 1;
+            } else if (arg == "-config") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.config_path = argv[i];
             } else if (arg == "-ts" || arg == "--tensor-split") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1135,6 +1170,44 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
     return params;
 }
 
+static void load_pipo_config(cmd_params & params) {
+    if (params.config_path.empty()) {
+        return;
+    }
+
+    std::ifstream conf_file(params.config_path, std::ios_base::in);
+    if (!conf_file.is_open()) {
+        throw std::runtime_error(string_format("unable to open config file %s", params.config_path.c_str()));
+    }
+
+    auto j = nlohmann::json::parse(conf_file);
+    if (j.contains("overrides")) {
+        if (!j["overrides"].is_array()) {
+            throw std::runtime_error("'overrides' must be an array");
+        }
+        params.config_overrides.clear();
+        for (const auto & item : j["overrides"]) {
+            if (!item.is_string()) {
+                throw std::runtime_error("'overrides' must contain only strings");
+            }
+            params.config_overrides.push_back(item.get<std::string>());
+        }
+    }
+
+    if (j.contains("offloads")) {
+        if (!j["offloads"].is_array()) {
+            throw std::runtime_error("'offloads' must be an array");
+        }
+        params.config_offloads.clear();
+        for (const auto & item : j["offloads"]) {
+            if (!item.is_string()) {
+                throw std::runtime_error("'offloads' must contain only strings");
+            }
+            params.config_offloads.push_back(item.get<std::string>());
+        }
+    }
+}
+
 struct cmd_params_instance {
     std::string        model;
     int                n_prompt;
@@ -1165,6 +1238,7 @@ struct cmd_params_instance {
     size_t             fit_target;
     uint32_t           fit_min_ctx;
     bool               enable_pipo;
+    bool               enable_decode_offload;
 
     llama_model_params to_llama_mparams() const {
         llama_model_params mparams = llama_model_default_params();
@@ -1227,7 +1301,7 @@ struct cmd_params_instance {
                use_mmap == other.use_mmap && use_direct_io == other.use_direct_io &&
                devices == other.devices &&
                no_host == other.no_host &&
-               enable_pipo == other.enable_pipo &&
+               enable_pipo == other.enable_pipo && enable_decode_offload == other.enable_decode_offload &&
                vec_tensor_buft_override_equal(tensor_buft_overrides, other.tensor_buft_overrides);
     }
 
@@ -1249,6 +1323,50 @@ struct cmd_params_instance {
         return cparams;
     }
 };
+
+static bool find_cuda_bufts(ggml_backend_buffer_type_t & cuda, ggml_backend_buffer_type_t & cuda_host) {
+    cuda = nullptr;
+    cuda_host = nullptr;
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        if (!buft) {
+            continue;
+        }
+        auto * name = ggml_backend_buft_name(buft);
+        if (name && strstr(name, "CUDA")) {
+            cuda = buft;
+            cuda_host = ggml_backend_dev_host_buffer_type(dev);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+static void apply_pipo_tensor_layout(cmd_params_instance & instance, const cmd_params & params) {
+    if (!instance.enable_pipo) {
+        return;
+    }
+
+    ggml_backend_buffer_type_t cuda = nullptr;
+    ggml_backend_buffer_type_t cuda_host = nullptr;
+    if (!find_cuda_bufts(cuda, cuda_host) || cuda == nullptr || cuda_host == nullptr) {
+        throw std::runtime_error("--pipo requires a CUDA backend");
+    }
+
+    if (!params.config_overrides.empty()) {
+        instance.tensor_buft_overrides.clear();
+        for (const auto & pattern : params.config_overrides) {
+            instance.tensor_buft_overrides.push_back({ pattern.c_str(), cuda_host });
+        }
+        instance.tensor_buft_overrides.push_back({ ".*", cuda });
+        instance.tensor_buft_overrides.push_back({ nullptr, nullptr });
+    } else {
+        pipo_tensor_layout(instance.tensor_buft_overrides, cuda, cuda_host);
+    }
+}
 
 static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_params & params) {
     std::vector<cmd_params_instance> instances;
@@ -1316,23 +1434,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
                 /* .enable_pipo  = */ pipo,
+                /* .enable_decode_offload = */ params.enable_decode_offload,
             };
-            if(pipo) {
-                ggml_backend_buffer_type_t cuda = nullptr, cuda_host = nullptr;
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        auto name = ggml_backend_buft_name(buft);
-                        if (strstr(name, "CUDA")){
-                            cuda = buft;
-                            cuda_host = ggml_backend_dev_host_buffer_type(dev);
-                            break;
-                        }
-                    }
-                }
-                pipo_tensor_layout(instance.tensor_buft_overrides, cuda, cuda_host);
-            }
+            apply_pipo_tensor_layout(instance, params);
             instances.push_back(instance);
         }
 
@@ -1370,23 +1474,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
                 /* .enable_pipo  = */ pipo,
+                /* .enable_decode_offload = */ params.enable_decode_offload,
             };
-            if(pipo) {
-                ggml_backend_buffer_type_t cuda = nullptr, cuda_host = nullptr;
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        auto name = ggml_backend_buft_name(buft);
-                        if (strstr(name, "CUDA")){
-                            cuda = buft;
-                            cuda_host = ggml_backend_dev_host_buffer_type(dev);
-                            break;
-                        }
-                    }
-                }
-                pipo_tensor_layout(instance.tensor_buft_overrides, cuda, cuda_host);
-            }
+            apply_pipo_tensor_layout(instance, params);
             instances.push_back(instance);
         }
 
@@ -1424,23 +1514,9 @@ static std::vector<cmd_params_instance> get_cmd_params_instances(const cmd_param
                 /* .fit_target   = */ fpt,
                 /* .fit_min_ctx  = */ fpc,
                 /* .enable_pipo  = */ pipo,
+                /* .enable_decode_offload = */ params.enable_decode_offload,
             };
-            if(pipo) {
-                ggml_backend_buffer_type_t cuda = nullptr, cuda_host = nullptr;
-                for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
-                    auto * dev = ggml_backend_dev_get(i);
-                    auto * buft = ggml_backend_dev_buffer_type(dev);
-                    if (buft) {
-                        auto name = ggml_backend_buft_name(buft);
-                        if (strstr(name, "CUDA")){
-                            cuda = buft;
-                            cuda_host = ggml_backend_dev_host_buffer_type(dev);
-                            break;
-                        }
-                    }
-                }
-                pipo_tensor_layout(instance.tensor_buft_overrides, cuda, cuda_host);
-            }
+            apply_pipo_tensor_layout(instance, params);
             instances.push_back(instance);
         }
     }
@@ -2239,6 +2315,12 @@ int main(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+    try {
+        load_pipo_config(params);
+    } catch (const std::exception & e) {
+        fprintf(stderr, "%s: error: failed to load config: %s\n", __func__, e.what());
+        return 1;
+    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
@@ -2341,7 +2423,25 @@ int main(int argc, char ** argv) {
 
             if (inst.enable_pipo) {
                 std::vector<const char*> p_offload, d_offload;
-                pipo_assign_offload(p_offload, d_offload);
+
+                if (!params.config_overrides.empty() || !params.config_offloads.empty()) {
+                    for (const auto & pattern : params.config_overrides) {
+                        if (pattern.find("blk") != std::string::npos) {
+                            p_offload.push_back(pattern.c_str());
+                        }
+                    }
+                    if (inst.enable_decode_offload) {
+                        for (const auto & pattern : params.config_offloads) {
+                            d_offload.push_back(pattern.c_str());
+                        }
+                    }
+                } else {
+                    pipo_assign_offload(p_offload, d_offload);
+                    if (!inst.enable_decode_offload) {
+                        d_offload.clear();
+                    }
+                }
+
                 llama_model_set_offload(lmodel, p_offload.data(), d_offload.data(), p_offload.size(), d_offload.size());
             }
 
