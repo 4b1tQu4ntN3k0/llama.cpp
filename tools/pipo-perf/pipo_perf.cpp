@@ -454,7 +454,8 @@ static double measure_h2d_bandwidth(ggml_backend_t gpu_backend) {
 }
 
 static void print_usage(const char * argv0) {
-	cerr << "Usage: " << argv0 << " -m <model.gguf> -c <output-path>\n";
+	cerr << "Usage: " << argv0 << " -m <model.gguf> [-c <output-path>]\n";
+	cerr << "Default output: examples/pipo-alg/alg_cfg\n";
 }
 
 static string resolve_output_path(const string & raw_output_path) {
@@ -498,7 +499,7 @@ static void print_summary(
 
 int main(int argc, char ** argv) {
 	string model_path;
-	string output_path;
+	string output_path = "examples/pipo-alg/alg_cfg";
 	int n_threads = 4;
 
 	for (int i = 1; i < argc; ++i) {
@@ -512,7 +513,7 @@ int main(int argc, char ** argv) {
 		}
 	}
 
-	if (model_path.empty() || output_path.empty()) {
+	if (model_path.empty()) {
 		print_usage(argv[0]);
 		return 1;
 	}
