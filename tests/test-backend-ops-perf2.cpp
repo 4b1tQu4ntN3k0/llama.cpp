@@ -490,7 +490,7 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
         ggml_graph_add_node(gf, result);
     }
     // 6. 执行计算图
-    n_iter                  = n_iter / n_runs;
+    n_iter                  = max(1, n_iter / n_runs);
     int64_t t_compute_start = ggml_time_us();
     int i = 0;
     for (; i < n_iter; i++) {
@@ -632,7 +632,7 @@ int main(int argc, char ** argv) {
         cerr << "perf op: " << op.short_desc() << '\n' << "key = " << op.op_key() << "\n\n";
         op_labels[op.op_key()] = op.short_desc();
         op_perf_results[cpu_backend_name][op.op_key()] = run_single_bench(op, cpu_backend, 20, 1);
-            fprintf(stderr, "%s # %lf\n", cpu_backend_name, op_perf_results[cpu_backend_name][op.op_key()]);
+        fprintf(stderr, "%s # %lf\n", cpu_backend_name, op_perf_results[cpu_backend_name][op.op_key()]);
         op_perf_results[gpu_backend_name][op.op_key()] = run_single_bench(op, gpu_backend, 40, 1);
         fprintf(stderr, "%s # %lf\n\n", gpu_backend_name, op_perf_results[gpu_backend_name][op.op_key()]);
     }
