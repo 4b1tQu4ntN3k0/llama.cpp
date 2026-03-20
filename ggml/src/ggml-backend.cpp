@@ -1366,6 +1366,11 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
     // pipo_print_tensor_backend(sched, graph);
 
+// #define PIPO_SPLIT_ONLY_BEFORE_DYNAMIC
+#ifndef PIPO_SPLIT_ONLY_BEFORE_DYNAMIC
+    // make a split immediately after dynamic tensor to start next tensor transfer
+    bool prev_has_dynamic_input = false;
+#endif
     // pass 5: split graph, find tensors that need to be copied
     {
         int i_split = 0;
@@ -1397,7 +1402,31 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
 
             // check if we should start a new split based on the sources of the current node
             bool need_new_split = false;
+#ifndef PIPO_SPLIT_ONLY_BEFORE_DYNAMIC
+            if (sched->enable_pipo && prev_has_dynamic_input){
+                need_new_split = true;
+                prev_has_dynamic_input = false;
+            } else
+
+            // check dynamic input
+            if (node_backend_id == cur_backend_id){
+                for (int j = 0; j < GGML_MAX_SRC; j++) {
+                    struct ggml_tensor * src = node->src[j];
+                    if (src == NULL) {
+                        continue;
+                    }
+                    if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && sched->enable_pipo && is_dynamic_tensor(src)) {
+                        need_new_split = true;
+                        prev_has_dynamic_input = true;
+                        break;
+                    }
+                }
+            }
+            if (!need_new_split && node_backend_id == cur_backend_id && split->n_inputs > 0) {
+#else 
             if (node_backend_id == cur_backend_id && split->n_inputs > 0) {
+#endif
+            
                 for (int j = 0; j < GGML_MAX_SRC; j++) {
                     struct ggml_tensor * src = node->src[j];
                     if (src == NULL) {
@@ -1411,10 +1440,12 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             need_new_split = true;
                             break;
                         }
+#ifdef PIPO_SPLIT_ONLY_BEFORE_DYNAMIC
                         if (sched->enable_pipo && is_dynamic_tensor(src)) {
                             need_new_split = true;
                             break;
                         }
+#endif
                     }
                     
                     // check if the split has too many inputs
