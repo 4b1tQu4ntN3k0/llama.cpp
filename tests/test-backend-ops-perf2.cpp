@@ -13,10 +13,8 @@ using namespace std;
 #include <ggml-backend.h>
 #include <ggml.h>
 
+#include <init_tensor_cuda.h>
 
-/*
-    TODO: reserve cuda mem base on graph alloc and kv cache alloc instead of guessing
-*/
 static std::vector<std::string> escape_patterns_manual(const std::vector<std::string> & patterns) {
     std::vector<std::string> escaped_patterns;
     escaped_patterns.reserve(patterns.size());
@@ -43,6 +41,13 @@ static std::vector<std::string> escape_patterns_manual(const std::vector<std::st
     return escaped_patterns;
 }
 
+/* single test result */
+struct SingleTestResult {
+    const pipo_unique_op & op;
+    ggml_backend_t         backend;
+    double                 compute_ms;
+};
+
 /* tensor random utils
     refer to test-backend-ops.cpp
 */
@@ -59,15 +64,50 @@ static std::vector<std::string> escape_patterns_manual(const std::vector<std::st
 #include <random>
 #include <thread>
 
+static ggml_backend_t cuda_backend = nullptr;
+static bool try_cuda_init_tensor(ggml_tensor* t, float min, float max){
+    if (!init_tensor_cuda_support_type(t->type))
+        return false;
+    assert(cuda_backend);
+    ggml_init_params init_params = {
+        /* .mem_size = */ ggml_tensor_overhead() * 1 + ggml_graph_overhead_custom(8192, false),
+        /* .mem_base = */ NULL,
+        /* .no_alloc = */ true,
+    };
+    struct ggml_context *        ctx = ggml_init(init_params);
+    ggml_tensor* cuda_t = ggml_dup_tensor(ctx, t);
+    ggml_backend_buffer* buf = ggml_backend_alloc_ctx_tensors(ctx, cuda_backend);
+    if (!buf){
+        ggml_free(ctx);
+        fprintf(stderr, "%s: cuda init tensor fail\n", __func__);
+        return false;
+    }
+    // int64_t begin = ggml_time_ms();
+    if (init_tensor_cuda_simple(cuda_t, min, max) != 0){
+        ggml_free(ctx);
+        ggml_backend_buffer_free(buf);
+        fprintf(stderr, "%s: cuda init tensor fail\n", __func__);
+        return false;
+    }
+    // int64_t end = ggml_time_ms();
+    // fprintf(stderr, "cuda filled tensor of size [%3ld,%3ld,%3ld,%3ld] in %ld ms\n", t->ne[0], t->ne[1], t->ne[2], t->ne[3], end - begin);
+    ggml_backend_tensor_copy(cuda_t,t);
+    ggml_free(ctx);
+    ggml_backend_buffer_free(buf);
+    return true;
+}
+
 static void init_tensor_uniform(ggml_tensor * tensor,
                                 float         min     = -1.0f,
                                 float         max     = 1.0f,
                                 int64_t       int_min = 0,
                                 int64_t       int_max = 100) {
     size_t nels = ggml_nelements(tensor);
-
+    if (try_cuda_init_tensor(tensor, min, max)){
+        return;
+    }
     // 处理整数类型
-    if (tensor->type == GGML_TYPE_I8 || tensor->type == GGML_TYPE_I16 || tensor->type == GGML_TYPE_I32 ||
+    else if (tensor->type == GGML_TYPE_I8 || tensor->type == GGML_TYPE_I16 || tensor->type == GGML_TYPE_I32 ||
         tensor->type == GGML_TYPE_I64) {
         // 为整数类型创建对应大小的缓冲区
         size_t element_size = 0;
@@ -167,6 +207,7 @@ static void init_tensor_uniform(ggml_tensor * tensor,
     }
     // 处理浮点数类型
     else if (tensor->type == GGML_TYPE_F32) {
+
         std::vector<float> data(nels);
         {
             // parallel initialization
@@ -292,13 +333,26 @@ static void init_tensor_uniform(ggml_tensor * tensor,
         GGML_ABORT("Unsupported tensor type in init_tensor_uniform");
     }
 }
-
-/* single test result */
-struct SingleTestResult {
-    const pipo_unique_op & op;
-    ggml_backend_t         backend;
-    double                 compute_ms;
-};
+static void init_mul_mat_id_tensors(ggml_context * ctx, int n_mats) {
+    std::random_device rd;
+    std::default_random_engine rng(rd());
+    for (ggml_tensor * t = ggml_get_first_tensor(ctx); t != NULL; t = ggml_get_next_tensor(ctx, t)) {
+        if (t->type == GGML_TYPE_I32) {
+            if (pipo_is_view_op(t->op)) { continue; }
+            // ids
+            for (int64_t r = 0; r < ggml_nrows(t); r++) {
+                std::vector<int32_t> data(t->ne[0]);
+                for (int i = 0; i < t->ne[0]; i++) {
+                    data[i] = i % n_mats;
+                }
+                std::shuffle(data.begin(), data.end(), rng);
+                ggml_backend_tensor_set(t, data.data(), r * t->nb[1], t->ne[0] * sizeof(int32_t));
+            }
+        } else {
+            init_tensor_uniform(t);
+        }
+    }
+}
 
 static void print_perf_summary(const unordered_map<string, unordered_map<string, double>> & op_perf_results,
                                const unordered_map<string, string> & op_labels,
@@ -358,8 +412,8 @@ static void print_perf_summary(const unordered_map<string, unordered_map<string,
          << " (" << h2d_bandwidth * 1000.0 / (1024.0 * 1024.0 * 1024.0) << " GiB/s)\n";
 }
 
-static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend, int n_iter) {
-    ggml_init_params    init_params = {
+static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend, int n_iter, int batch_size) {
+    ggml_init_params init_params = {
         /* .mem_size = */ ggml_tensor_overhead() * 128 + ggml_graph_overhead_custom(8192, false),
         /* .mem_base = */ NULL,
         /* .no_alloc = */ true,
@@ -403,6 +457,8 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     if (op.op_type == GGML_OP_GET_ROWS) {
         init_tensor_uniform(src_tensors.at(0));
         init_tensor_uniform(src_tensors.at(1), 0, 0, 0, src_tensors.at(0)->ne[1] - 1);
+    } else if (op.op_type == GGML_OP_MUL_MAT_ID){
+        init_mul_mat_id_tensors(ctx, result->ne[1]);
     } else {
         for (size_t i = 0; i < src_tensors.size(); i++) {
             init_tensor_uniform(src_tensors.at(i));
@@ -421,47 +477,97 @@ static double run_single_bench(const pipo_unique_op & op, ggml_backend_t backend
     // duplicate the op
     int  n_runs;
     bool is_cpu = ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU;
+    
     if (is_cpu) {
-        n_runs = 5;
-    } else if (op.op_type == GGML_OP_MUL_MAT){
-        n_runs = 10;
-    }
-    else{
-        // n_iter = 10;
-        n_runs = 10;
+        n_runs = 20;
+    } else if (op.op_type == GGML_OP_MUL_MAT || (op.op_type == GGML_OP_FLASH_ATTN_EXT && batch_size > 8)) {
+        n_runs = max(1, 200 / max((int)sqrt(batch_size), 1));
+    } else {
+        n_iter = max(1, 500000 / ((int)sqrt(batch_size)) + 1);
+        n_runs = max((5000 / batch_size), 1);
     }
     for (int i = 1; i < n_runs; i++) {
         ggml_graph_add_node(gf, result);
     }
     // 6. 执行计算图
-    n_iter                  = n_iter / n_runs;
+    n_iter                  = max(1, n_iter / n_runs);
     int64_t t_compute_start = ggml_time_us();
-    for (int i = 0; i < n_iter; i++) {
+    int i = 0;
+    for (; i < n_iter; i++) {
         ggml_backend_graph_compute(backend, gf);
+        int64_t t_compute_end = ggml_time_us();
+        // 单个 op perf 不超过 10s
+        if (t_compute_end - t_compute_start > (int64_t)1e6 * 10) break;
     }
 
     int64_t t_compute_end = ggml_time_us();
-    double  compute_ms    = (t_compute_end - t_compute_start) / 1000.0 / (n_iter * n_runs);
+    double  compute_ms    = (t_compute_end - t_compute_start) / 1000.0 / (i * n_runs);
 
     ggml_backend_buffer_free(buffer);
     ggml_free(ctx);
     return compute_ms;
 }
 
+static void print_usage(int argc, char ** argv) {
+    cerr << "Usage: " << argv[0] << " -m <model> [-p prefill-batch-size] [-n n_decode]\n";
+}
+
 /* main */
 int main(int argc, char ** argv) {
-    if (argc != 3) {
-        cerr << "Usage: " << argv[0] << " -m <model>\n";
-        return 1;
+    int    batch_size = 100;
+    int decode_len = 32;
+    string model_path;
+    {
+        int i = 1;
+        for (; i < argc; i++) {
+            if (strcmp(argv[i], "-m") == 0) {
+                if (i + 1 < argc) {
+                    model_path = argv[++i];
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            } else if (strcmp(argv[i], "-p") == 0) {
+                if (i + 1 < argc) {
+                    try {
+                        batch_size = std::stoi(argv[++i]);
+                    } catch (...) {
+                        print_usage(argc, argv);
+                        return 1;
+                    }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            }
+            else if (strcmp(argv[i], "-n") == 0) {
+                if (i + 1 < argc) {
+                    try {
+                        decode_len = std::stoi(argv[++i]);
+                    } catch (...) {
+                        print_usage(argc, argv);
+                        return 1;
+                    }
+                } else {
+                    print_usage(argc, argv);
+                    return 1;
+                }
+            }
+        }
+        if (model_path.empty()) {
+            print_usage(argc, argv);
+            return 1;
+        }
     }
-    const char * model_path = argv[2];
+
+    int context_size = decode_len + batch_size - 1;
     // load backends
     ggml_backend_load_all();
     // load model
     llama_model_params model_params = llama_model_default_params();
     model_params.use_mmap           = false;
     model_params.no_alloc           = true;
-    llama_model * model             = llama_model_load_from_file(model_path, model_params);
+    llama_model * model             = llama_model_load_from_file(model_path.c_str(), model_params);
 
     if (model == NULL) {
         cerr << __LINE__ << ": Failed to load model\n";
@@ -470,27 +576,28 @@ int main(int argc, char ** argv) {
 
     // initialize context
     llama_context_params ctx_params = llama_context_default_params();
-    ctx_params.n_ctx                = 1;
-    ctx_params.n_batch              = 1;
+    ctx_params.n_ctx                = context_size;
+    ctx_params.n_batch              = batch_size;
     ctx_params.no_perf              = true;
 
     llama_context * ctx = llama_init_from_model(model, ctx_params);
-
-    if (ctx == NULL) {
+    llama_context * batched_ctx = llama_init_from_model(model, ctx_params);
+    if (ctx == NULL || batched_ctx == NULL) {
         cerr << __LINE__ << ": Failed to create llama_context\n";
         return 1;
     }
-    ggml_cgraph *                      model_gf = pipo_get_graph(ctx);
-    std::unordered_set<pipo_unique_op> unique_ops;
-    for (int i = 0; i < ggml_graph_n_nodes(model_gf); ++i) {
-        ggml_tensor * node = ggml_graph_node(model_gf, i);
+    ggml_cgraph *                      decode_gf = pipo_get_graph(ctx, 1);
+    ggml_cgraph *                      batched_gf = pipo_get_graph(batched_ctx, batch_size);
+
+    // in each pair, first is decode op, second is batched op
+    std::unordered_map<pipo_unique_op, pipo_unique_op> unique_ops_map;
+    for (int i = 0; i < ggml_graph_n_nodes(decode_gf); ++i) {
+        ggml_tensor * node = ggml_graph_node(decode_gf, i);
         if (!node || pipo_is_view_op(node->op)) {
             continue;
         }
         pipo_unique_op op(node);
-        if (!unique_ops.insert(op).second) {
-            continue;
-        }
+        unique_ops_map.insert(make_pair(op, pipo_unique_op(ggml_graph_node(batched_gf, i))));
     }
 
     ggml_backend_t cpu_backend = ggml_backend_init_by_name("cpu", NULL);
@@ -507,7 +614,11 @@ int main(int argc, char ** argv) {
         cerr << __LINE__ << ": GPU backend not found\n";
         return 1;
     }
-    auto &                                               ops = unique_ops;
+    cuda_backend = gpu_backend;
+    llama_free(ctx);
+    llama_free(batched_ctx);
+    auto &                                               ops = unique_ops_map;
+    // decode perf result
     unordered_map<string, unordered_map<string, double>> op_perf_results;
     unordered_map<string, string>                        op_labels;
     const char *                                         cpu_backend_name = ggml_backend_name(cpu_backend);
@@ -516,14 +627,24 @@ int main(int argc, char ** argv) {
     const char * gpu_backend_name     = ggml_backend_name(gpu_backend);
     op_perf_results[gpu_backend_name] = unordered_map<string, double>();
 
-    for (auto & op : ops) {
+    for (auto & op_pair : ops) {
+        auto& op = op_pair.first;
         cerr << "perf op: " << op.short_desc() << '\n' << "key = " << op.op_key() << "\n\n";
         op_labels[op.op_key()] = op.short_desc();
-        op_perf_results[cpu_backend_name][op.op_key()] = run_single_bench(op, cpu_backend, 20);
+        op_perf_results[cpu_backend_name][op.op_key()] = run_single_bench(op, cpu_backend, 20, 1);
         fprintf(stderr, "%s # %lf\n", cpu_backend_name, op_perf_results[cpu_backend_name][op.op_key()]);
-
-        op_perf_results[gpu_backend_name][op.op_key()] = run_single_bench(op, gpu_backend, 40);
+        op_perf_results[gpu_backend_name][op.op_key()] = run_single_bench(op, gpu_backend, 40, 1);
         fprintf(stderr, "%s # %lf\n\n", gpu_backend_name, op_perf_results[gpu_backend_name][op.op_key()]);
+    }
+
+    // batched perf result
+    unordered_map<string, double> op_perf_batched;
+    for (auto& op_pair : ops){
+        const string key = op_pair.first.op_key();
+        auto& op = op_pair.second;
+        cerr << "perf op: " << op.short_desc() << '\n' << "key = " << op.op_key() << "\n\n";
+        op_perf_batched[key] = run_single_bench(op, gpu_backend, 2000, batch_size) / batch_size;
+        fprintf(stderr, "%s # %lf per batch\n\n", gpu_backend_name, op_perf_batched[key]);
     }
     // test cpu -> gpu bandwidth
     double h2d_bandwidth;
@@ -558,7 +679,12 @@ int main(int argc, char ** argv) {
     }
     nlohmann::json result;
     result["op_perf_result"] = op_perf_results;
+    result["op_perf_batched"] = op_perf_batched;
     result["h2d_bandwidth"]  = h2d_bandwidth;
+    result["batch_size"]     = batch_size;
+
+    // TODO: we need a independent context size here
+    result["context_size"] = context_size;
 
     print_perf_summary(op_perf_results, op_labels, h2d_bandwidth);
     cout << result.dump(4) << '\n';
