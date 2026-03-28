@@ -93,6 +93,7 @@ add_library(llama
             models/llada.cpp
             models/llama-iswa.cpp
             models/llama.cpp
+            models/llama_pipo.cpp
             models/maincoder.cpp
             models/mamba-base.cpp
             models/mamba.cpp
