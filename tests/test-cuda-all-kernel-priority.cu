@@ -29,6 +29,7 @@ int main() {
     CUDA_CHECK(cudaGetDeviceProperties(&prop, device));
     
     std::cout << "Device: " << prop.name << std::endl;
+    std::cout << "asyncEngineCount: " << prop.asyncEngineCount << std::endl;
     std::cout << "Total SMs: " << prop.multiProcessorCount << std::endl;
     std::cout << "Priority Range: Low=" << priority_low << ", High=" << priority_high << std::endl;
 
