@@ -155,6 +155,8 @@ int main(int argc, char ** argv) {
 		const string arg = argv[i];
 		if (arg == "-c" && i + 1 < argc) {
 			output_dir = argv[++i];
+		} else if (arg == "-p" && i + 1 < argc) {
+			profile_path = argv[++i];
 		} else if ((arg == "-r" || arg == "--mem-ratio") && i + 1 < argc) {
 			mem_ratio = stod(argv[++i]);
 		} else if (arg == "--moe" || arg == "-moe") {

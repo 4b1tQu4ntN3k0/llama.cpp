@@ -6,7 +6,7 @@ ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$ROOT_DIR/build-release/bin/llama-pipo-perf"
 
 DEFAULT_MODEL="/mnt/win_E/llm_model/Qwen3-14B-Q4_K_M.gguf"
-DEFAULT_CFG="$ROOT_DIR/examples/pipo-alg/alg-cfg/14B.json"
+DEFAULT_CFG="$ROOT_DIR/examples/pipo-alg/alg_cfg/14B.json"
 
 MODEL="$DEFAULT_MODEL"
 CFG="$DEFAULT_CFG"

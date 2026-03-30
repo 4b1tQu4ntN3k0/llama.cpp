@@ -5,8 +5,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/../.." && pwd)"
 BINARY="$ROOT_DIR/build-release/bin/llama-pipo-override"
 
-DEFAULT_PROFILE="$ROOT_DIR/examples/pipo-alg/alg-cfg/pipo_profile.json"
-DEFAULT_CFG_DIR="$ROOT_DIR/examples/pipo-alg/alg-cfg/"
+DEFAULT_PROFILE="$ROOT_DIR/examples/pipo-alg/alg_cfg/pipo_profile.json"
+DEFAULT_CFG_DIR="$ROOT_DIR/examples/pipo-alg/alg_cfg/"
 DEFAULT_RATIO="0.77"
 
 PROFILE="$DEFAULT_PROFILE"
@@ -72,4 +72,4 @@ if [ ! -x "$BINARY" ]; then
     exit 1
 fi
 
-exec "$BINARY" "$PROFILE" -c "$CFG_DIR" -r "$RATIO" $ENABLE_MOE "$@"
+exec "$BINARY" -p "$PROFILE" -c "$CFG_DIR" -r "$RATIO" $ENABLE_MOE "$@"
