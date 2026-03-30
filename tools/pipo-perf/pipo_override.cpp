@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iostream>
 #include <limits>
+#include <map>
 #include <set>
 #include <regex>
 #include <string>
@@ -27,6 +28,11 @@ struct pipo_profile_entry {
 	string bench_signature;
 	int node_index = -1;
 	int src_index = -1;
+};
+
+struct bound_profile_entry {
+	pipo_profile_entry profile;
+	vector<string> bound_bias_names;
 };
 
 struct parent_choice {
@@ -146,6 +152,59 @@ static bool is_forced_moe_cpu_weight(const string & weight_name) {
 	return regex_search(weight_name, moe_exps_regex);
 }
 
+static bool is_bias_weight_name(const string & weight_name) {
+	return weight_name.size() > 5 && weight_name.compare(weight_name.size() - 5, 5, ".bias") == 0;
+}
+
+static bool is_matrix_weight_name(const string & weight_name) {
+	return weight_name.size() > 7 && weight_name.compare(weight_name.size() - 7, 7, ".weight") == 0;
+}
+
+static string weight_name_to_bias_name(const string & weight_name) {
+	if (!is_matrix_weight_name(weight_name)) {
+		return string();
+	}
+	return weight_name.substr(0, weight_name.size() - 7) + ".bias";
+}
+
+static vector<bound_profile_entry> bind_bias_profiles(const vector<pipo_profile_entry> & profiles) {
+	map<string, pipo_profile_entry> bias_profiles;
+	set<string> weight_names;
+	vector<bound_profile_entry> bound_profiles;
+	bound_profiles.reserve(profiles.size());
+
+	for (const auto & profile : profiles) {
+		if (is_matrix_weight_name(profile.weight_name)) {
+			weight_names.insert(profile.weight_name);
+		}
+		if (is_bias_weight_name(profile.weight_name)) {
+			bias_profiles.emplace(profile.weight_name, profile);
+		}
+	}
+
+	for (const auto & profile : profiles) {
+		if (is_bias_weight_name(profile.weight_name)) {
+			continue;
+		}
+
+		bound_profile_entry entry;
+		entry.profile = profile;
+
+		const string bias_name = weight_name_to_bias_name(profile.weight_name);
+		if (!bias_name.empty() && weight_names.count(profile.weight_name)) {
+			const auto it = bias_profiles.find(bias_name);
+			if (it != bias_profiles.end()) {
+			entry.profile.size += it->second.size;
+			entry.bound_bias_names.push_back(it->second.weight_name);
+			}
+		}
+
+		bound_profiles.push_back(std::move(entry));
+	}
+
+	return bound_profiles;
+}
+
 int main(int argc, char ** argv) {
 	string profile_path = "examples/pipo-alg/alg_cfg/pipo_profile.json";
 	string output_dir = "examples/pipo-alg/alg_cfg";
@@ -204,52 +263,60 @@ int main(int argc, char ** argv) {
 
 	const int m_total = get_gpu_budget_mib(mem_ratio);
 
-	vector<pipo_profile_entry> dp_profiles;
-	dp_profiles.reserve(profiles.size());
+	const vector<bound_profile_entry> bound_profiles = bind_bias_profiles(profiles);
+
+	vector<bound_profile_entry> dp_profiles;
+	dp_profiles.reserve(bound_profiles.size());
 	set<string> forced_cpu_names;
 	set<string> forced_gpu_names;
 	int dp_m = m_total;
 
 	if (is_moe) {
-		vector<pipo_profile_entry> exps_profiles, non_exps_profiles;
-		for (const auto & p : profiles) {
+		vector<bound_profile_entry> exps_profiles, non_exps_profiles;
+		for (const auto & entry : bound_profiles) {
+			const auto & p = entry.profile;
 			if (is_forced_cpu_weight(p.weight_name)) {
 				forced_cpu_names.insert(p.weight_name);
+				forced_cpu_names.insert(entry.bound_bias_names.begin(), entry.bound_bias_names.end());
 				continue;
 			}
 			if (is_forced_moe_cpu_weight(p.weight_name)) {
-				exps_profiles.push_back(p);
+				exps_profiles.push_back(entry);
 			} else {
-				non_exps_profiles.push_back(p);
+				non_exps_profiles.push_back(entry);
 			}
 		}
 		size_t non_exps_total_mib = 0;
-		for (const auto & p : non_exps_profiles) {
-			non_exps_total_mib += p.size;
+		for (const auto & entry : non_exps_profiles) {
+			non_exps_total_mib += entry.profile.size;
 		}
 		if ((int)non_exps_total_mib <= m_total) {
 			cerr << "MoE: non-exps total " << non_exps_total_mib << " MiB <= GPU budget " << m_total
 				 << " MiB -> forcing non-exps to GPU, running DP on exps half\n";
-			for (const auto & p : non_exps_profiles) {
-				forced_gpu_names.insert(p.weight_name);
+			for (const auto & entry : non_exps_profiles) {
+				forced_gpu_names.insert(entry.profile.weight_name);
+				forced_gpu_names.insert(entry.bound_bias_names.begin(), entry.bound_bias_names.end());
 			}
 			dp_profiles = std::move(exps_profiles);
 			dp_m = m_total - (int)non_exps_total_mib;
 		} else {
 			cerr << "MoE: non-exps total " << non_exps_total_mib << " MiB > GPU budget " << m_total
 				 << " MiB -> forcing exps to CPU, running DP on non-exps half\n";
-			for (const auto & p : exps_profiles) {
-				forced_cpu_names.insert(p.weight_name);
+			for (const auto & entry : exps_profiles) {
+				forced_cpu_names.insert(entry.profile.weight_name);
+				forced_cpu_names.insert(entry.bound_bias_names.begin(), entry.bound_bias_names.end());
 			}
 			dp_profiles = std::move(non_exps_profiles);
 		}
 	} else {
-		for (const auto & p : profiles) {
+		for (const auto & entry : bound_profiles) {
+			const auto & p = entry.profile;
 			if (is_forced_cpu_weight(p.weight_name)) {
 				forced_cpu_names.insert(p.weight_name);
+				forced_cpu_names.insert(entry.bound_bias_names.begin(), entry.bound_bias_names.end());
 				continue;
 			}
-			dp_profiles.push_back(p);
+			dp_profiles.push_back(entry);
 		}
 	}
 
@@ -308,16 +375,16 @@ int main(int argc, char ** argv) {
 	for (int j = 0; j <= dp_m; ++j) {
 		prev[j][0] = 0.0;
 		parent[0][j][0] = { static_cast<uint16_t>(j), 0, 0 };
-		if (j >= (int) dp_profiles[0].size) {
-			prev[j][1] = max(0.0, dp_profiles[0].cpu_time - dp_profiles[0].gpu_time - dp_profiles[0].transfer_ms);
-			parent[0][j][1] = { static_cast<uint16_t>(j - (int) dp_profiles[0].size), 0, 1 };
+		if (j >= (int) dp_profiles[0].profile.size) {
+			prev[j][1] = max(0.0, dp_profiles[0].profile.cpu_time - dp_profiles[0].profile.gpu_time - dp_profiles[0].profile.transfer_ms);
+			parent[0][j][1] = { static_cast<uint16_t>(j - (int) dp_profiles[0].profile.size), 0, 1 };
 		} else {
 			parent[0][j][1] = { static_cast<uint16_t>(j), 1, 0 };
 		}
 	}
 
 	for (int i = 1; i < n; ++i) {
-		const double switch_cost = -dp_profiles[i].transfer_ms;
+		const double switch_cost = -dp_profiles[i].profile.transfer_ms;
 		for (int j = 0; j <= dp_m; ++j) {
 			curr[j][0] = prev[j][0];
 			curr[j][1] = prev[j][1];
@@ -329,9 +396,9 @@ int main(int argc, char ** argv) {
 				parent[i][j][0] = { static_cast<uint16_t>(j), 1, 0 };
 			}
 
-			if (j >= (int) dp_profiles[i].size) {
-				const int prev_j = j - (int) dp_profiles[i].size;
-				const double gain = dp_profiles[i].cpu_time - dp_profiles[i].gpu_time;
+			if (j >= (int) dp_profiles[i].profile.size) {
+				const int prev_j = j - (int) dp_profiles[i].profile.size;
+				const double gain = dp_profiles[i].profile.cpu_time - dp_profiles[i].profile.gpu_time;
 				if (prev[prev_j][1] + gain > curr[j][1]) {
 					curr[j][1] = prev[prev_j][1] + gain;
 					parent[i][j][1] = { static_cast<uint16_t>(prev_j), 1, 1 };
@@ -357,7 +424,8 @@ int main(int argc, char ** argv) {
 	for (int i = n - 1; i >= 0; --i) {
 		const parent_choice choice = parent[i][cur_j][final_state];
 		if (choice.take_gpu) {
-			gpu_weights.push_back(dp_profiles[i].weight_name);
+			gpu_weights.push_back(dp_profiles[i].profile.weight_name);
+			gpu_weights.insert(gpu_weights.end(), dp_profiles[i].bound_bias_names.begin(), dp_profiles[i].bound_bias_names.end());
 		}
 		cur_j = choice.prev_j;
 		final_state = choice.prev_state;

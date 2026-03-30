@@ -373,6 +373,14 @@ static double run_single_bench(const bench_op_case & op, ggml_backend_t backend,
 	if (op.op_type == GGML_OP_GET_ROWS) {
 		init_tensor_uniform(src_tensors.at(0));
 		init_tensor_uniform(src_tensors.at(1), 0.0f, 0.0f, 0, src_tensors.at(0)->ne[1] - 1);
+	} else if (op.op_type == GGML_OP_MUL_MAT_ID) {
+		init_tensor_uniform(src_tensors.at(0));
+		init_tensor_uniform(src_tensors.at(1));
+		init_tensor_uniform(src_tensors.at(2), 0.0f, 0.0f, 0, src_tensors.at(0)->ne[2] - 1);
+	} else if (op.op_type == GGML_OP_ADD_ID) {
+		init_tensor_uniform(src_tensors.at(0));
+		init_tensor_uniform(src_tensors.at(1));
+		init_tensor_uniform(src_tensors.at(2), 0.0f, 0.0f, 0, src_tensors.at(1)->ne[1] - 1);
 	} else {
 		for (ggml_tensor * src : src_tensors) {
 			init_tensor_uniform(src);
