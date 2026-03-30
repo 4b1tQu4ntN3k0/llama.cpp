@@ -1037,6 +1037,10 @@ bool is_dynamic_tensor(struct ggml_tensor * tensor){
     return strncmp(tensor->name, "dynamic_", 8) == 0;
 }
 
+bool is_bias_tensor(struct ggml_tensor * tensor) {
+    std::string_view name(tensor->name);
+    return name.size() >= 5 && name.substr(name.size() - 5) == ".bias";
+}
 
 // assigns backends to ops and splits the graph into subgraphs that can be computed on the same backend
 void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgraph * graph) {
@@ -1325,7 +1329,8 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (src == NULL) {
                         continue;
                     }
-                    if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS && sched->enable_pipo && is_dynamic_tensor(src)) {
+                    if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS 
+                        && sched->enable_pipo && is_dynamic_tensor(src) && !is_bias_tensor(src)) {
                         need_new_split = true;
                         prev_has_dynamic_input = true;
                         break;
@@ -1351,7 +1356,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                             break;
                         }
 #ifdef PIPO_SPLIT_ONLY_BEFORE_DYNAMIC
-                        if (sched->enable_pipo && is_dynamic_tensor(src)) {
+                        if (sched->enable_pipo && is_dynamic_tensor(src) && !is_bias_tensor(src)) {
                             need_new_split = true;
                             break;
                         }
@@ -1712,7 +1717,7 @@ static enum ggml_status copy_dynamic_tensor_next(ggml_backend_sched_t sched, str
         assert(ggml_backend_is_cuda(split_backend));
         assert(dynamic_tensor_cpy_events[name]);
         
-        if(name.find("exps") != name.npos){
+        if(name.find("exps") != name.npos && name.find("bias") == name.npos){
             // update info
             assert(info->ids_tensor);
             if(ids_tensor != info->ids_tensor){
@@ -2976,7 +2981,7 @@ void ggml_backend_sched_set_pipo_tensor_map(ggml_backend_sched_t sched, const ch
     }
 
     auto is_moe_weight_tensor = [&](std::string name) -> bool {
-        return name.find("exps") != name.npos;
+        return name.find("exps") != name.npos && name.find("bias") == name.npos;
     };
 
     for(int i = n_tensors-1;i >= 0;i--){
