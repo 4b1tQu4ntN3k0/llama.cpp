@@ -273,6 +273,88 @@ static void parse_tensor_buffer_overrides(const std::string & value, std::vector
         overrides.push_back({buft_overrides.back().c_str(), buft_list.at(buffer_type)});
     }
 }
+static bool find_cuda_bufts(ggml_backend_buffer_type_t & cuda, ggml_backend_buffer_type_t & cuda_host) {
+    cuda = nullptr;
+    cuda_host = nullptr;
+
+    for (size_t i = 0; i < ggml_backend_dev_count(); ++i) {
+        auto * dev = ggml_backend_dev_get(i);
+        auto * buft = ggml_backend_dev_buffer_type(dev);
+        if (!buft) {
+            continue;
+        }
+        auto * name = ggml_backend_buft_name(buft);
+        if (name && strstr(name, "CUDA")) {
+            cuda = buft;
+            cuda_host = ggml_backend_dev_host_buffer_type(dev);
+            return true;
+        }
+    }
+    return false;
+}
+
+static void load_pipo_config(common_params & params, const std::string& config_path) {
+    if (config_path.empty()) {
+        return;
+    }
+
+    std::ifstream conf_file(config_path, std::ios_base::in);
+    if (!conf_file.is_open()) {
+        throw std::runtime_error(string_format("unable to open atsinfer config file %s", config_path.c_str()));
+    }
+
+    auto j = nlohmann::json::parse(conf_file);
+    if (j.contains("overrides")) {
+        if (!j["overrides"].is_array()) {
+            throw std::runtime_error("atsinfer config's `overrides` must be an array");
+        }
+        params.atsinfer_config_overrides.clear();
+        for (const auto & item : j["overrides"]) {
+            if (!item.is_string()) {
+                throw std::runtime_error("atsinfer config's `overrides` must contain only strings");
+            }
+            params.atsinfer_config_overrides.push_back(item.get<std::string>());
+        }
+    }
+
+    if (j.contains("offloads")) {
+        if (!j["offloads"].is_array()) {
+            throw std::runtime_error("atsinfer config's `offloads` must be an array");
+        }
+        params.atsinfer_config_offloads.clear();
+        for (const auto & item : j["offloads"]) {
+            if (!item.is_string()) {
+                throw std::runtime_error("atsinfer config's `offloads` must contain only strings");
+            }
+            params.atsinfer_config_offloads.push_back(item.get<std::string>());
+        }
+    }
+}
+
+static void atsinfer_tensor_layout(common_params & params) {
+        if (!params.tensor_buft_overrides.empty()){
+            throw std::invalid_argument("use atsinfer with other override stratagy is not allowed");
+        }
+        ggml_backend_buffer_type_t cuda      = nullptr;
+        ggml_backend_buffer_type_t cuda_host = nullptr;
+        if (!find_cuda_bufts(cuda, cuda_host) || cuda == nullptr || cuda_host == nullptr) {
+            throw std::runtime_error("atsinfer requires a CUDA backend");
+        }
+        if (params.atsinfer_config_overrides.empty()){
+            fprintf(stderr, "Warning: empty atsinfer override list is provided, default override stratagy is used.\n");
+            return;
+        }
+        if (!params.tensor_buft_overrides.empty()){
+            fprintf(stderr, "Warning: other override stratagies were ignored when using atsinfer\n");
+        }
+        
+        params.tensor_buft_overrides.clear();
+        for (const auto & pattern : params.atsinfer_config_overrides) {
+            params.tensor_buft_overrides.push_back({ pattern.c_str(), cuda_host });
+        }
+        params.tensor_buft_overrides.push_back({ ".*", cuda });
+        params.tensor_buft_overrides.push_back({ nullptr, nullptr });
+}
 
 static std::string clean_file_name(const std::string & fname) {
     std::string clean_fname = fname;
@@ -3910,11 +3992,26 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
             params.speculative.ngram_size_n = 24;
             params.speculative.n_min = 48;
             params.speculative.n_max = 64;
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--atsinfer"}, "config-path", "enable atsinfer for llama.cpp",
+        [](common_params & params, const std::string & config_file) {
+            load_pipo_config(params, config_file);
+            atsinfer_tensor_layout(params);
+        }
+    ).set_examples({ LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--atsinfer-do"}, {}, "enable decode offload for `--atsinfer`",
+        [](common_params &params, bool f){
+            params.enable_decode_offload = f;
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
     return ctx_arg;
 }
+
 
 void common_params_add_preset_options(std::vector<common_arg> & args) {
     // arguments below won't be treated as CLI args, only preset options
