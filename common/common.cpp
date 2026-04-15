@@ -1160,7 +1160,23 @@ common_init_result::common_init_result(common_params & params) :
     if (model == NULL) {
         return;
     }
+    if (params.enable_atsinfer) {
+        std::vector<const char*> p_offload, d_offload;
 
+        if (!params.atsinfer_config_overrides.empty() || !params.atsinfer_config_offloads.empty()) {
+            for (const auto & pattern : params.atsinfer_config_overrides) {
+                if (pattern.find("blk") != std::string::npos) {
+                    p_offload.push_back(pattern.c_str());
+                }
+            }
+            if (params.enable_decode_offload) {
+                for (const auto & pattern : params.atsinfer_config_offloads) {
+                    d_offload.push_back(pattern.c_str());
+                }
+            }
+        } 
+        llama_model_set_offload(model, p_offload.data(), d_offload.data(), p_offload.size(), d_offload.size());
+    }
     pimpl->model.reset(model);
 
     const llama_vocab * vocab = llama_model_get_vocab(model);
@@ -1481,6 +1497,8 @@ struct llama_model_params common_model_params_to_llama(common_params & params) {
     mparams.progress_callback           = params.load_progress_callback;
     mparams.progress_callback_user_data = params.load_progress_callback_user_data;
     mparams.no_alloc                    = params.no_alloc;
+    mparams.enable_pipo = params.enable_atsinfer;
+    
 
     return mparams;
 }
