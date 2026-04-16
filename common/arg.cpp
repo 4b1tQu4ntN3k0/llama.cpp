@@ -330,28 +330,28 @@ static void load_pipo_config(common_params & params, const std::string& config_p
 }
 
 static void atsinfer_tensor_layout(common_params & params) {
-        if (!params.tensor_buft_overrides.empty()){
-            throw std::invalid_argument("use atsinfer with other override stratagy is not allowed");
-        }
-        ggml_backend_buffer_type_t cuda      = nullptr;
-        ggml_backend_buffer_type_t cuda_host = nullptr;
-        if (!find_cuda_bufts(cuda, cuda_host) || cuda == nullptr || cuda_host == nullptr) {
-            throw std::runtime_error("atsinfer requires a CUDA backend");
-        }
-        if (params.atsinfer_config_overrides.empty()){
-            fprintf(stderr, "Warning: empty atsinfer override list is provided, default override stratagy is used.\n");
-            return;
-        }
-        if (!params.tensor_buft_overrides.empty()){
-            fprintf(stderr, "Warning: other override stratagies were ignored when using atsinfer\n");
-        }
-        
-        params.tensor_buft_overrides.clear();
-        for (const auto & pattern : params.atsinfer_config_overrides) {
-            params.tensor_buft_overrides.push_back({ pattern.c_str(), cuda_host });
-        }
-        params.tensor_buft_overrides.push_back({ ".*", cuda });
-        params.tensor_buft_overrides.push_back({ nullptr, nullptr });
+    if (!params.tensor_buft_overrides.empty()) {
+        throw std::invalid_argument("use atsinfer with other override stratagy is not allowed");
+    }
+    ggml_backend_buffer_type_t cuda      = nullptr;
+    ggml_backend_buffer_type_t cuda_host = nullptr;
+    if (!find_cuda_bufts(cuda, cuda_host) || cuda == nullptr || cuda_host == nullptr) {
+        throw std::runtime_error("atsinfer requires a CUDA backend");
+    }
+    if (params.atsinfer_config_overrides.empty()) {
+        fprintf(stderr, "Warning: empty atsinfer override list is provided, default override stratagy is used.\n");
+        return;
+    }
+    if (!params.tensor_buft_overrides.empty()) {
+        fprintf(stderr, "Warning: other override stratagies were ignored when using atsinfer\n");
+    }
+
+    params.tensor_buft_overrides.clear();
+    for (const auto & pattern : params.atsinfer_config_overrides) {
+        params.tensor_buft_overrides.push_back({ pattern.c_str(), cuda_host });
+    }
+    params.tensor_buft_overrides.push_back({ ".*", cuda });
+    params.tensor_buft_overrides.push_back({ nullptr, nullptr });
 }
 
 static std::string clean_file_name(const std::string & fname) {
@@ -3891,6 +3891,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--atsinfer"}, "config-path", "enable atsinfer for llama.cpp",
         [](common_params & params, const std::string & config_file) {
+            params.enable_atsinfer = true;
             load_pipo_config(params, config_file);
             atsinfer_tensor_layout(params);
         }

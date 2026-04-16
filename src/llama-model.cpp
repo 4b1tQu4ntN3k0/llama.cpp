@@ -3429,6 +3429,9 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
+    if (ml.no_alloc){
+        return true;
+    }
 
     // load tensor data
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
@@ -3464,7 +3467,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
-    if(params.enable_pipo){
+    if(!params.no_alloc && params.enable_pipo){
         return load_tensors_pipo(ml);
     }
     const auto & split_mode   = params.split_mode;

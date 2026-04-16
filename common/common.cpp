@@ -1398,6 +1398,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
     cparams.type_k = params.cache_type_k;
     cparams.type_v = params.cache_type_v;
 
+    cparams.enable_pipo = params.enable_atsinfer;
+
     return cparams;
 }
 

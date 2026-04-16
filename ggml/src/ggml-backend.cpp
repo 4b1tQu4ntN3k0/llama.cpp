@@ -1329,8 +1329,7 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
                     if (src == NULL) {
                         continue;
                     }
-                    if (src->buffer != NULL && src->buffer->usage == GGML_BACKEND_BUFFER_USAGE_WEIGHTS 
-                        && sched->enable_pipo && is_dynamic_tensor(src) && !is_bias_tensor(src)) {
+                    if (sched->enable_pipo && is_dynamic_tensor(src) && !is_bias_tensor(src)) {
                         need_new_split = true;
                         prev_has_dynamic_input = true;
                         break;
