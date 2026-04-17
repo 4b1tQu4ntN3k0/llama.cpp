@@ -60,3 +60,18 @@ dynamic tensor的内存申请修改为reserve的逻辑，不在decode阶段申�
 
 - 阶段性的新笔记
   - 不 offload ffn_down 的策略一定是不够好的。它们的效果不会比静态强，因为难免多 override 了几个 tensor
+
+
+---
+
+# atfinfer for openclaw
+
+[x] llama-server finished
+
+[] 自动适配新模型
+  - 逻辑插入在load-tensors的话会破坏对model.layers的约定，如果除了构建计算图没有别的地方这么做可以选择这种实现
+  - 使用宏在model impl中重定义layers => 不可行，c宏做不到
+  - 在model.build_graph调用前面实现 => 不可行，model是常量
+  - 在build-graph时再做offload => 不可行，原框架的offload是只改后端的，现有实现需要更换为独立context中的张量
+  - 插入到forward_expand的逻辑中 => 可行，但是对原本很干净的ggml_cgraph的侵入性比较大
+  - 构建一个伪model传递给建图？ => 采用这种
