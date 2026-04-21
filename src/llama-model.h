@@ -581,6 +581,8 @@ private:
 
     struct impl;
     std::unique_ptr<impl> pimpl;
+
+    llama_model* pipo_make_fake_model(const llm_graph_params & params) const;
 };
 
 const char * llm_type_name(llm_type type);

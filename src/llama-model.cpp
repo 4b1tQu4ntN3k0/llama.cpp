@@ -3429,6 +3429,9 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
             tensors_by_name.emplace_back(ggml_get_name(cur), cur);
         }
     }
+    if (ml.no_alloc){
+        return true;
+    }
 
     // load tensor data
     for (auto & [ctx, buf_map] : ctx_buf_maps) {
@@ -3464,7 +3467,7 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 }
 
 bool llama_model::load_tensors(llama_model_loader & ml) {
-    if(params.enable_pipo){
+    if(!params.no_alloc && params.enable_pipo){
         return load_tensors_pipo(ml);
     }
     const auto & split_mode   = params.split_mode;
@@ -9157,18 +9160,91 @@ llama_memory_i * llama_model::create_memory(const llama_memory_params & params, 
 
     return res;
 }
+static bool pipo_need_offload(const std::vector<std::regex>& regex, const std::string& name){
+    for(const auto & pattern: regex){
+        if (std::regex_search(name, pattern)){
+            return true;
+        }
+    }
+    return false;
+}
 
+static void pipo_init_regex(std::vector<std::regex>& regex, const std::vector<const char*>& patterns){
+    regex.clear();
+    for(const auto &p:patterns){
+        if (p) {
+            regex.emplace_back(p);
+        }
+    }
+}
+
+// 这个实现非常依赖llama_model的内存排布，必须随struct llama_model的更改而更改
+// 可以通过缓存decode和prefill下的伪llama_model来避免反复调用这个函数
+llama_model* llama_model::pipo_make_fake_model(const llm_graph_params & params) const{
+    llama_model* pipo_model = new llama_model(this->params);
+    // 阻止递归
+    pipo_model->params.enable_pipo = false;
+    pipo_model->type = this->type;
+    pipo_model->arch = this->arch;
+    pipo_model->name = this->name;
+    pipo_model->hparams = this->hparams;
+    pipo_model->classifier_labels = this->classifier_labels;
+
+    memcpy((void*)&pipo_model->tok_embd, (const void*)&this->tok_embd,(sizeof(void*)) * ( &pipo_model->per_layer_proj_norm - &pipo_model->tok_embd));
+
+    pipo_model->layers = this->layers;
+    std::vector<std::regex> regex;
+    if(params.gtype == LLM_GRAPH_TYPE_DEFAULT_PREFILL){
+        pipo_init_regex(regex, this->p_offload_weights);
+    }
+    else{
+        GGML_ASSERT(params.gtype == LLM_GRAPH_TYPE_DEFAULT_DECODE);
+        pipo_init_regex(regex, this->d_offload_weights);
+    }
+    auto get_offloaded = [&](ggml_tensor * t) {
+        if (t && pipo_need_offload(regex, std::string(t->name))) {
+            struct ggml_tensor * dynamic_tensor =
+                ggml_backend_sched_get_pipo_tensor(params.sched, this->name_weight_map.at(std::string(t->name)));
+            params.res->dynamic_src_tensor_list[dynamic_tensor->name].push_back(t);
+            params.res->dynamic_dst_tensor_list[dynamic_tensor->name].push_back(dynamic_tensor);
+            return dynamic_tensor;
+        }
+        return t;
+    };
+    // replace tensors here
+    for (auto & layer : pipo_model->layers){
+        struct ggml_tensor** layer_tensor_fields = &layer.attn_norm;
+        for (size_t i = 0; i < sizeof(llama_layer) / sizeof(struct ggml_tensor*); i++){
+            struct ggml_tensor*&  t = layer_tensor_fields[i];
+            t = get_offloaded(t);
+        }
+    }
+    
+    memcpy((void*)&pipo_model->dense_2_out_layers, (const void*)&this->dense_2_out_layers,(sizeof(void*)) * ( &pipo_model->dense_3_out_layers - &pipo_model->dense_2_out_layers));
+
+    pipo_model->gguf_kv = this->gguf_kv;
+    pipo_model->devices = this->devices;
+    pipo_model->tensors_by_name = this->tensors_by_name;
+    pipo_model->loras = std::unordered_set<llama_adapter_lora*>();
+
+    return pipo_model;
+}
 ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
     std::unique_ptr<llm_graph_context> llm;
+    if (this->params.enable_pipo)
+    {
+        llama_model* pipo_model = this->pipo_make_fake_model(params);
+        auto gf = pipo_model->build_graph(params);
+        delete pipo_model;
+        return gf;
+    }
 
     switch (arch) {
         case LLM_ARCH_LLAMA:
-            if(this->params.enable_pipo){
-                    llm = std::make_unique<llm_build_llama_pipo<false>>(*this, params);
-            }
-            else {
+            {
                 llm = std::make_unique<llm_build_llama<false>>(*this, params);
-            } break;
+                break;
+            }
         case LLM_ARCH_LLAMA4:
             {
                 if (hparams.swa_type == LLAMA_SWA_TYPE_NONE) {
@@ -9279,22 +9355,11 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3:
             {
-                if(this->params.enable_pipo){
-                    llm = std::make_unique<llm_build_qwen3_pipo>(*this, params);
-                }
-                else{
-                    llm = std::make_unique<llm_build_qwen3>(*this, params);
-                }
-                
+                llm = std::make_unique<llm_build_qwen3>(*this, params);
             } break;
         case LLM_ARCH_QWEN3MOE:
             {
-                if(this->params.enable_pipo){
-                    llm = std::make_unique<llm_build_qwen3moe_pipo>(*this, params);
-                }
-                else{
-                    llm = std::make_unique<llm_build_qwen3moe>(*this, params);
-                }
+                llm = std::make_unique<llm_build_qwen3moe>(*this, params);
             } break;
         case LLM_ARCH_QWEN3VL:
             {
@@ -9449,11 +9514,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_GLM4:
             {
-                if (this->params.enable_pipo) {
-                    llm = std::make_unique<llm_build_glm4_pipo>(*this, params);
-                } else {
-                    llm = std::make_unique<llm_build_glm4>(*this, params);
-                }
+                llm = std::make_unique<llm_build_glm4>(*this, params);
             } break;
         case LLM_ARCH_GLM4_MOE:
             {
@@ -9603,11 +9664,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_OPENAI_MOE:
             {
-                if (this->params.enable_pipo) {
-                    llm = std::make_unique<llm_build_openai_moe_iswa_pipo>(*this, params);
-                } else {
-                    llm = std::make_unique<llm_build_openai_moe_iswa>(*this, params);
-                }
+                llm = std::make_unique<llm_build_openai_moe_iswa>(*this, params);
             } break;
         case LLM_ARCH_FALCON_H1:
             {
@@ -9652,12 +9709,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN3NEXT:
             {
-                if(this->params.enable_pipo){
-                    llm = std::make_unique<llm_build_qwen3next_pipo>(*this, params);
-                }
-                else{
-                    llm = std::make_unique<llm_build_qwen3next>(*this, params);
-                }
+                llm = std::make_unique<llm_build_qwen3next>(*this, params);
             } break;
         case LLM_ARCH_QWEN35:
             {
@@ -9665,12 +9717,7 @@ ggml_cgraph * llama_model::build_graph(const llm_graph_params & params) const {
             } break;
         case LLM_ARCH_QWEN35MOE:
             {
-                if(this->params.enable_pipo){
-                    llm = std::make_unique<llm_build_qwen35moe_pipo>(*this, params);
-                }
-                else{
-                    llm = std::make_unique<llm_build_qwen35moe>(*this, params);
-                }
+                llm = std::make_unique<llm_build_qwen35moe>(*this, params);
             } break;
         case LLM_ARCH_MISTRAL3:
             {

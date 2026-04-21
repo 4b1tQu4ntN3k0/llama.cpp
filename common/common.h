@@ -616,6 +616,12 @@ struct common_params {
     // return false from callback to abort model loading or true to continue
     llama_progress_callback load_progress_callback = NULL;
     void *                  load_progress_callback_user_data = NULL;
+
+    // atsinfer params
+    bool enable_atsinfer;
+    std::vector<std::string> atsinfer_config_overrides;
+    std::vector<std::string> atsinfer_config_offloads;
+    bool enable_decode_offload;
 };
 
 // call once at the start of a program if it uses libcommon

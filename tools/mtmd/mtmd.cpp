@@ -114,6 +114,7 @@ mtmd_context_params mtmd_context_params_default() {
         /* image_max_tokens  */ -1,
         /* cb_eval           */ nullptr,
         /* cb_eval_user_data */ nullptr,
+        /* enable_atfinfer   */ false
     };
     return params;
 }
@@ -181,6 +182,7 @@ struct mtmd_context {
             /* warmup            */ ctx_params.warmup,
             /* cb_eval           */ ctx_params.cb_eval,
             /* cb_eval_user_data */ ctx_params.cb_eval_user_data,
+            /* enable_atfinfer   */ ctx_params.enable_atfinfer
         };
 
         auto res = clip_init(mmproj_fname, ctx_clip_params);
