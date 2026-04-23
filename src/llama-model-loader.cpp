@@ -1044,7 +1044,11 @@ static ggml_backend_buffer_type_t select_weight_buft(const llama_hparams & hpara
 
 struct ggml_tensor * llama_model_loader::create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
-        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags) {
+        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags,
+    bool enable_pipo, 
+    std::map<llama_tensor_key, struct ggml_tensor *>& weight_map,
+    std::unordered_map<std::string, struct ggml_tensor *>& name_weight_map,
+    ggml_context* ctx_dynamic) {
     auto ctx_for_buft = [&](ggml_backend_buffer_type_t buft) -> ggml_context * {
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
@@ -1279,6 +1283,28 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         size_data += ggml_nbytes(cur);
     } else {
         n_created++;
+    }
+    auto get_suffix = [](const std::string & name) -> std::string {
+        auto pos = name.find('.');
+        if (pos != std::string::npos) {
+            pos = name.find('.', pos + 1);
+            if (pos != std::string::npos) {
+                return name.substr(pos + 1);
+            }
+        }
+        return name;
+    };
+    if (enable_pipo) {
+        // pipo check new weight type
+        if (strstr(ggml_backend_buft_name(buft), "CUDA_Host")) {
+            llama_tensor_key tensor_k = { tn.tensor, t_meta->type };
+            if (!weight_map.count(tensor_k)) {
+                auto new_tensor = ggml_dup_tensor(ctx_dynamic, cur);
+                ggml_set_name(new_tensor, ("dynamic_" + get_suffix(tn.str())).c_str());
+                weight_map[tensor_k] = new_tensor;
+            }
+            name_weight_map[t_meta->name] = weight_map[tensor_k];
+        }
     }
 
     return tensor;
