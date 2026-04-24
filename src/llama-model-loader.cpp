@@ -1294,9 +1294,9 @@ struct ggml_tensor * llama_model_loader::create_tensor(
         }
         return name;
     };
-    if (enable_pipo) {
+    if (!hparams.no_alloc && enable_pipo) {
         // pipo check new weight type
-        if (strstr(ggml_backend_buft_name(buft), "CUDA_Host")) {
+        if (strstr(ggml_backend_buft_name(buft), "CUDA_Host") || strstr(ggml_backend_buft_name(buft), "CPU")) {
             llama_tensor_key tensor_k = { tn.tensor, t_meta->type };
             if (!weight_map.count(tensor_k)) {
                 auto new_tensor = ggml_dup_tensor(ctx_dynamic, cur);

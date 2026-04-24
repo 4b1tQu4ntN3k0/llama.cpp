@@ -8062,13 +8062,18 @@ bool llama_model::load_tensors(llama_model_loader & ml) {
 
     LLAMA_LOG_INFO("%s: loading model tensors, this can take a while... (mmap = %s, direct_io = %s)\n",
         __func__, ml.use_mmap ? "true" : "false", ml.use_direct_io ? "true" : "false");
-
-    ggml_init_params params_dynamic = {
-        /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors,
-        /*.mem_buffer =*/ NULL,
-        /*.no_alloc   =*/ true,
-    };
-    ggml_context * ctx_dynamic = ggml_init(params_dynamic);
+    ggml_context * ctx_dynamic;
+    if (!params.no_alloc && params.enable_pipo){
+        ggml_init_params params_dynamic = {
+            /*.mem_size   =*/ ggml_tensor_overhead() * ml.n_tensors,
+            /*.mem_buffer =*/ NULL,
+            /*.no_alloc   =*/ true,
+        };
+        ctx_dynamic = ggml_init(params_dynamic);
+    }
+    else{
+        ctx_dynamic = nullptr;
+    }
     // build a list of buffer types for the CPU and GPU devices
     pimpl->cpu_buft_list = make_cpu_buft_list(devices, params.use_extra_bufts, params.no_host);
     for (const auto & dev : devices) {
