@@ -178,9 +178,13 @@ struct llama_model_loader {
 
     const struct ggml_tensor * check_tensor_dims(const std::string & name, const std::vector<int64_t> & ne, bool required) const;
 
+    using llama_tensor_key = std::pair<llm_tensor, ggml_type>; 
     struct ggml_tensor * create_tensor(
         const llama_hparams & hparams, const buft_list_t * buft_list_cpu, const buft_list_t * buft_list_input, const buft_list_t * buft_list_output,
-        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags);
+        const buft_list_t * buft_list_layer, const LLM_TN_IMPL & tn, const std::initializer_list<int64_t> & ne, int flags,     bool enable_pipo, 
+    std::map<llama_tensor_key, struct ggml_tensor *>& weight_map,
+    std::unordered_map<std::string, struct ggml_tensor *>& name_weight_map,
+    ggml_context* ctx_dynamic);
 
     struct ggml_tensor * create_tensor_as_view(struct ggml_context * ctx, struct ggml_tensor * base, const std::string & name, const std::initializer_list<int64_t> & ne, size_t offset, bool required = true);
 

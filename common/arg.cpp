@@ -4010,6 +4010,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
 
+    add_opt(common_arg(
+        {"--atsinfer"}, "config-path", "enable atsinfer for llama.cpp",
+        [](common_params & params, const std::string & config_file) {
+            params.enable_atsinfer = true;
+            load_pipo_config(params, config_file);
+            atsinfer_tensor_layout(params);
+        }
+    ).set_examples({ LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
+    add_opt(common_arg(
+        {"--atsinfer-do"}, {}, "enable decode offload for `--atsinfer`",
+        [](common_params &params, bool f){
+            params.enable_decode_offload = f;
+        }
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI}));
+
     return ctx_arg;
 }
 

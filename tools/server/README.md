@@ -1417,7 +1417,7 @@ curl http://localhost:8080/v1/messages \
     "max_tokens": 1024,
     "system": "You are a helpful assistant.",
     "messages": [
-      {"role": "user", "content": "Hello!"}
+      {"role": "user", "content": "Develop a hanota solver in cpp."}
     ]
   }'
 ```

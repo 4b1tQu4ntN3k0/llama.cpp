@@ -1661,24 +1661,9 @@ void ggml_backend_sched_split_graph(ggml_backend_sched_t sched, struct ggml_cgra
         assert(graph_copy->size > graph_copy->n_leafs);
         graph_copy->leafs[graph_copy->n_leafs++] = leaf;
     }
-
     // set ids for all splits
     for (int i = 0; i < sched->n_splits; ++i) {
         sched->splits[i].graph.uid = ggml_graph_next_uid();
-    }
-    // init dynamic tensors list && cpy_event
-    sched->dynamic_tensor_list.clear();
-    sched->dynamic_tensor_cpy_events.clear();
-    for (int i = 0; i < sched->n_splits; i++) {
-        struct ggml_backend_sched_split * split = &sched->splits[i];
-        for (int j = 0; j < split->n_inputs; j++) {
-            struct ggml_tensor * input = split->inputs[j];
-            if(is_dynamic_tensor(input)){
-                std::string name = input->name;
-                // sched->dynamic_tensor_list[name].push_back();
-                // sched->dynamic_tensor_cpy_events[name] = ;
-            }
-        }
     }
 }
 
