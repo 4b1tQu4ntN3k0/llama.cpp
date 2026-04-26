@@ -8051,9 +8051,9 @@ bool llama_model::load_tensors_pipo(llama_model_loader & ml) {
 }
 #endif
 bool llama_model::load_tensors(llama_model_loader & ml) {
-    if(!params.no_alloc && params.enable_pipo){
-        return load_tensors_pipo(ml);
-    }
+    // if(!params.no_alloc && params.enable_pipo){
+    //     return load_tensors_pipo(ml);
+    // }
     const auto & split_mode   = params.split_mode;
     const auto & use_mlock    = params.use_mlock;
     const auto & tensor_split = params.tensor_split;

@@ -353,7 +353,6 @@ struct cmd_params {
     std::vector<bool>                enable_pipo;
     std::vector<size_t>              fit_params_target;
     std::vector<uint32_t>            fit_params_min_ctx;
-    std::vector<bool>                enable_pipo;
     bool                             enable_decode_offload;
     std::string                      config_path;
     std::vector<std::string>         config_overrides;
@@ -1560,7 +1559,6 @@ struct test {
     bool                     enable_pipo;
     size_t                   fit_target;
     uint32_t                 fit_min_ctx;
-    bool                     enable_pipo;
     int                      n_prompt;
     int                      n_gen;
     int                      n_depth;
@@ -2101,6 +2099,7 @@ struct markdown_printer : public printer {
         }
         if (params.fit_params_min_ctx.size() > 1 || params.fit_params_min_ctx != cmd_params_defaults.fit_params_min_ctx) {
             fields.emplace_back("fit_min_ctx");
+        }
         if (params.enable_pipo.size() > 1 || params.enable_pipo != cmd_params_defaults.enable_pipo) {
             fields.emplace_back("enable_pipo");
         }
